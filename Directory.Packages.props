@@ -16,7 +16,7 @@
          and, from 0.2.0, SSB demodulation from complex baseband), the OFDM modem
          (Cf/OfdmModulator/OfdmDemodulator/Datac*), and the LDPC codec - each lifted out of this
          repo into its own package. -->
-    <PackageVersion Include="M0LTE.Dsp" Version="0.2.0" />
+    <PackageVersion Include="M0LTE.Dsp" Version="0.2.1" />
     <!-- The FM link model, lifted out of this repository's test project so that the modems
          measured through it - here and in the out-of-tree ones - share one definition. -->
     <PackageVersion Include="M0LTE.FmChannel" Version="0.7.0" />
