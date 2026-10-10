@@ -40,6 +40,35 @@ public class ModemProspectorTests
     }
 
     [Fact]
+    public void A_48_kHz_Stations_Capture_Is_Still_Read_By_The_12_kHz_Mode_That_Carried_It()
+    {
+        // GB7RDG from 2026-10-05: an ms110d modem moved its channel to 48 kHz, its captures came
+        // out at 48 kHz, and a sweep of 48 kHz modes only read 5 of 2100 of them. The same off-air
+        // beacon, at the rate that station now records at.
+        (float[] native, int nativeRate) = Load();
+        var upsampler = new M0LTE.Dsp.Upsampler(48000, 4);
+        var audio = new float[upsampler.OutputLength(native.Length)];
+        upsampler.Process(native, audio);
+
+        IReadOnlyList<CaptureReading> readings = CaptureSweep.Run(
+            audio, nativeRate * 4, 1133.98, CaptureSweep.ModesFor(48000));
+
+        readings.Should().Contain(r => r.Source == Station && r.Mode == "afsk300");
+    }
+
+    [Fact]
+    public void A_48_kHz_Station_Tries_Every_Packet_Mode_It_Could_Run()
+    {
+        IReadOnlyList<string> modes = CaptureSweep.ModesFor(48000);
+
+        modes.Should().Contain(["afsk300", "afsk300-il2pc", "bpsk300", "qpsk2400", "afsk1200"],
+            "a 48 kHz channel runs the 12 kHz modes too, behind the rate bridge");
+        modes.Should().Contain(["fsk9600-il2p", "c4fsk9600"]);
+        modes.Should().NotContain(m => m.StartsWith("freedv-", StringComparison.Ordinal));
+        modes.Should().NotContain(m => m.StartsWith("ms110d-", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void The_Stations_Own_Modes_Are_Tried_And_The_Hf_Waveforms_Are_Not()
     {
         // The sweep runs beside a live receiver, so it buys only what it can use: a 12 kHz

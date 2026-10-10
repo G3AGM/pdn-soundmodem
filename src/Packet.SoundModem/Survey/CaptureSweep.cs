@@ -29,10 +29,14 @@ public sealed record CaptureReading(
 /// one DSP rate (the station's own), and only the modes that could be what the capture holds.
 /// </para>
 /// <para>
-/// <b>Only the station's own DSP rate.</b> A 12 kHz station's captures are 12 kHz, and this
+/// <b>Only the modes the station could run.</b> A 12 kHz station's captures are 12 kHz, and this
 /// deliberately does not resample them to try the 48 kHz modes: a station that cannot run a mode
-/// gains nothing from being told it heard one, and resampling every capture twice is most of the
-/// cost for the half of the catalogue the answer can never be.
+/// gains nothing from being told it heard one. A 48 kHz station can run every 12 kHz built-in
+/// mode as well as its own, so its captures are tried with both - the 12 kHz ones at 12 kHz
+/// behind the rate bridge, as its channel would run them. Until 2026-10-10 this took the
+/// station's rate alone, and GB7RDG's survey went blind on 40 m the day an ms110d modem moved
+/// its channel to 48 kHz: 118 of 4950 captures readable before, 5 of 2100 after, because only
+/// the FM 9600 family was being tried against HF packet bursts.
 /// </para>
 /// <para>
 /// <b>Not the HF data waveforms.</b> They are most of the running time of a full sweep and they
@@ -54,13 +58,26 @@ public static class CaptureSweep
         var modes = new List<string>();
         foreach (string mode in ModemCatalog.KnownModes)
         {
-            if (ModemCatalog.DspRateFor(mode) == dspRate && IsPacketMode(mode))
+            if (RunsAt(mode, dspRate) && IsPacketMode(mode))
             {
                 modes.Add(mode);
             }
         }
 
         return modes;
+    }
+
+    /// <summary>
+    /// Whether a station whose channel runs at <paramref name="dspRate"/> could run
+    /// <paramref name="mode"/>: at its own rate, or - a built-in mode only - at a rate that divides
+    /// the channel's, which the rate bridge runs (<see cref="ModemCatalog.CreateForChannel"/>). A
+    /// plugin mode is built at its declared rate or not at all.
+    /// </summary>
+    public static bool RunsAt(string mode, int dspRate)
+    {
+        int native = ModemCatalog.DspRateFor(mode);
+        return native == dspRate
+            || (!ModemPluginRegistry.IsRegistered(mode) && native < dspRate && dspRate % native == 0);
     }
 
     /// <summary>Whether a mode is packet-radio lineage rather than an HF data waveform.</summary>

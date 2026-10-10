@@ -76,8 +76,10 @@ public static class ModeReader
         }
 
         // The sink is required by the catalogue and deliberately ignored: see the type remarks
-        // for why FrameDecoded is the honest source here.
-        IModem modem = ModemCatalog.Create(mode, dspRate, _ => { }, options);
+        // for why FrameDecoded is the honest source here. Built as a station's channel builds
+        // it, so a 12 kHz mode reading 48 kHz audio runs at 12 kHz behind the rate bridge
+        // (issue #648) - the same receiver the station itself would have used.
+        IModem modem = ModemCatalog.CreateForChannel(mode, dspRate, _ => { }, options);
         try
         {
             modem.FrameDecoded += (frame, quality) => decoded(frame, quality);
