@@ -266,18 +266,21 @@ public sealed class OpenWebRxAudioInputTests : IAsyncDisposable
         await first.GreetAsync(compression: "none");
         using OpenWebRxAudioInput input = await opening;
 
-        // Ten seconds of audio makes it a healthy session, which earns a one-second breath. Read
-        // as it is sent, as the station would, so none of it is lost to a full buffer.
+        // Ten seconds of audio makes it a healthy session, which earns a one-second breath. Sent a
+        // second at a time and each second read before the next is sent, so the 8 s buffer can
+        // never fill however late the reader is scheduled, and every sample is accounted for.
         short[] tone = Tone(12000 * 10);
         byte[] pcm = new byte[tone.Length * 2];
         Buffer.BlockCopy(tone, 0, pcm, 0, pcm.Length);
-        Task<float[]> reading = Task.Run(() => ReadAtLeast(input, tone.Length), TestContext.Current.CancellationToken);
+        int received = 0;
         for (int chunk = 0; chunk < 10; chunk++)
         {
             await first.SendAudioAsync(pcm.AsMemory(chunk * 24000, 24000));
+            received += ReadAtLeast(input, 12000).Length;
         }
 
-        (await reading).Should().HaveCount(tone.Length);
+        received.Should().Be(tone.Length);
+        input.DroppedSamples.Should().Be(0);
         await first.CloseAsync();
 
         FakeReceiver second = await NextReceiverAsync();
