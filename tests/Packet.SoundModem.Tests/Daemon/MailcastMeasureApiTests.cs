@@ -52,7 +52,14 @@ public sealed class MailcastMeasureApiTests
     [Fact]
     public async Task A_Measurement_Runs_On_Shaped_Noise_And_Answers_With_The_Edges()
     {
-        var measurer = new MailcastFilterMeasurer(Rate, skip: () => false);
+        // The measurer asks skip about a block only once a measurement is running (Process drops
+        // anything before that unread), so the first call is the measurement being armed.
+        bool armed = false;
+        var measurer = new MailcastFilterMeasurer(Rate, skip: () =>
+        {
+            armed = true;
+            return false;
+        });
         using var station = new Station(measurer);
         // One long clip of genuinely continuous noise, not a short chunk replayed: a replayed
         // chunk is periodic at the replay rate, which reads as a comb of spectral lines rather
@@ -62,16 +69,27 @@ public sealed class MailcastMeasureApiTests
 
         Task<HttpResponseMessage> post = station.Client.PostAsync(station.Url, content: null);
 
-        // Feeds the clip from the start every time round: cheap while MeasureAsync has not been
-        // called yet (Process drops it unread), and real, non-repeating audio for the roughly
-        // 10 s the measurement actually takes once it has.
+        // Offers the clip's first block until the request has armed the measurement, and only
+        // then plays on through it: the measurer counts samples rather than seconds, and needs
+        // 10 s of the 11 s clip, which this loop feeds in well under a second. Played straight
+        // through from the start, a request that took longer than that to arrive - one HTTP
+        // round trip on a loaded box - found the clip already gone and waited for audio that
+        // never came, until the client gave up at 100 s (#686). Held at its start, the block
+        // that arms it is the first one measured, and everything after it is real,
+        // non-repeating audio. A request that ends early (a 401, a 404) stops the loop too.
         const int Block = Rate / 10;
         int at = 0;
         while (!post.IsCompleted && at < clip.Length)
         {
             measurer.Process(clip.AsSpan(at, Math.Min(Block, clip.Length - at)));
-            at += Block;
-            await Task.Delay(1);
+            if (armed)
+            {
+                at += Block;
+            }
+            else
+            {
+                await Task.Delay(1);
+            }
         }
 
         HttpResponseMessage answer = await post;
