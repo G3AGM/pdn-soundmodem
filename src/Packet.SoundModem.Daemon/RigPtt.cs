@@ -67,6 +67,21 @@ internal static class RigStation
             : throw new InvalidOperationException("this rig is not set up to key through rigctld");
 
     /// <summary>
+    /// The PTT for a device with no keying line of its own - a <c>pipe:</c> station or a
+    /// <c>--wav-loop</c> recording. Keys through <paramref name="rig"/> exactly like a sound-card
+    /// station does when <paramref name="pttConfig"/> says rigctld, which is useful for
+    /// exercising rig features (tuning windows, the receive window) with no hardware at all
+    /// (#655). Otherwise keys nothing, same as before this existed. Config validation
+    /// (<c>DaemonConfig.ValidateRig</c>) refuses a rigctld PTT with no <c>"rig"</c> section, so
+    /// <paramref name="rig"/> is never null here when <paramref name="pttConfig"/> says rigctld -
+    /// the null check stays only as a defence against that invariant moving later.
+    /// </summary>
+    internal static IPttControl PttForTestDevice(PttConfig? pttConfig, RigControl? rig) =>
+        pttConfig?.Type == "rigctld" && rig is not null
+            ? rig.KeyingPtt()
+            : new NullPtt();
+
+    /// <summary>
     /// <paramref name="inner"/> with this rig's tuning windows guarding it: a keyup is refused
     /// while the rig is retuned, and the rig is never retuned while it is keyed. A PTT that
     /// already goes through this rig is returned as it is.

@@ -83,7 +83,7 @@ A `--two-tone` or `--tone` run is refused, with the reason on stderr, when:
 | `--two-tone` and `--tone` are both given; they are two ways to run one test. | `2` |
 | The config file describes a monitor (`monitor` section), which has no transmitter. | `2` |
 | The device is `ubersdr:`, `openwebrx:`, `iqcard:`, `rtltcp:` or `iqpipe:`, a receiver with nothing to key. | `1` |
-| Nothing keys the radio: no `--ptt` or `ptt` section and not a `flex:` device. `--wav-loop` and `pipe:` devices have no PTT either. | `1` |
+| Nothing keys the radio: no `--ptt` or `ptt` section and not a `flex:` device. `--wav-loop` and `pipe:` devices have no PTT either, unless `"ptt": {"type": "rigctld"}` is given alongside a `rig` section, in which case they key through the rig like a sound-card station does. | `1` |
 | `txTest.enabled` is `false` in the config file. | `1` |
 | The channel stayed busy for 60 s, so the test was withdrawn without keying. | `1` |
 

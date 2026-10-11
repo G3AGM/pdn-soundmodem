@@ -1,5 +1,6 @@
 using M0LTE.Radio.Audio;
 using Packet.SoundModem.Channel;
+using Packet.SoundModem.Rig;
 
 namespace Packet.SoundModem.Daemon;
 
@@ -52,9 +53,15 @@ internal sealed class PipeStationDevice(DeviceKind kind, string spec) : StationD
                 : new UpsamplingAudioOutput(pipeOut, dspRate);
             var input = new PipeAudioInput(inPipe, pipeRate);
             Console.WriteLine($"audio: pipe in={inPipe} out={outPipe} {pipeRate} Hz -> {dspRate} Hz");
+            IPttControl ptt = RigStation.PttForTestDevice(context.Ptt, context.Rig);
+            if (context.Rig is RigControl rig && ptt is not NullPtt)
+            {
+                Console.WriteLine($"ptt: rigctld {rig.Endpoint} (T 1 to key, T 0 to unkey)");
+            }
+
             return Task.FromResult(new DeviceOpening
             {
-                Ptt = new NullPtt(),
+                Ptt = ptt,
                 Playback = playback,
                 Input = input,
             });

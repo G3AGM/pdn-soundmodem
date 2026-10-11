@@ -1,3 +1,6 @@
+using M0LTE.Radio.Audio;
+using Packet.SoundModem.Rig;
+
 namespace Packet.SoundModem.Daemon;
 
 /// <summary>
@@ -64,9 +67,15 @@ internal sealed class WavLoopStationDevice(StationDevice named, string path)
         }
 
         Console.WriteLine($"audio: wav-loop {Recording} {wavLoop.SampleRate} Hz -> {context.DspRate} Hz");
+        IPttControl ptt = RigStation.PttForTestDevice(context.Ptt, context.Rig);
+        if (context.Rig is RigControl rig && ptt is not NullPtt)
+        {
+            Console.WriteLine($"ptt: rigctld {rig.Endpoint} (T 1 to key, T 0 to unkey)");
+        }
+
         return Task.FromResult(new DeviceOpening
         {
-            Ptt = new M0LTE.Radio.Audio.NullPtt(),
+            Ptt = ptt,
             Playback = new NullAudioOutput(context.DspRate),
             Input = wavLoop,
         });
