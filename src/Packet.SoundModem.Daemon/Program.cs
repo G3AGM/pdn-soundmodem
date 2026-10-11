@@ -186,6 +186,7 @@ AlsaConfig? alsaConfig = null;
 PagingConfig? paging = null;
 FlexConfig? flexConfig = null;
 UberSdrConfig? uberSdrConfig = null;
+OpenWebRxConfig? openWebRxConfig = null;
 WaterfallConfig? waterfallConfig = null;
 PublishConfig? publishConfig = null;
 SurveyConfig? surveyConfig = null;
@@ -256,6 +257,7 @@ if (configPath is not null)
     paging = config.Paging;
     flexConfig = config.Flex;
     uberSdrConfig = config.UberSdr;
+    openWebRxConfig = config.OpenWebRx;
     waterfallConfig = config.Waterfall;
     publishConfig = config.Publish;
     apiConfig = config.Api;
@@ -554,7 +556,8 @@ StationDevice stationDevice;
 try
 {
     stationDevice = DeviceKinds.Resolve(
-        device, wavLoopPath, new DeviceSettings(uberSdrConfig, HasWaterfall: waterfallConfig is not null));
+        device, wavLoopPath,
+        new DeviceSettings(uberSdrConfig, HasWaterfall: waterfallConfig is not null, openWebRxConfig));
 }
 catch (InvalidDataException malformed)
 {
@@ -670,7 +673,7 @@ if (mailcastConfig is not null)
 {
     MailcastRadio mailcastRadio = MailcastStation.RadioFor(
         stationDevice.MailcastKind, bandPlan, dialFrequency, receiveDialHz, sideband,
-        flexTuning, uberSdrConfig, hasRig: rigConfig is not null);
+        flexTuning, uberSdrConfig, hasRig: rigConfig is not null, openWebRxConfig);
     mailcastPlacement = MailcastPlacement.Decide(
         mailcastConfig, mailcastRadio, MailcastPlacement.HalfWidthHz(), out string? mailcastRefusal);
     if (mailcastPlacement is null)
@@ -2450,9 +2453,10 @@ if (mailcast is not null && mailcastPlacement is { Retunes: true })
 
 // Audio + PTT: the device opens itself (see StationDevice and the kinds in Devices/): a FlexRadio
 // DAX triplet (--device flex:...), an UberSDR web receiver's IQ stream (--device ubersdr:...,
-// receive only), a pair of pipes, a recording (--wav-loop), or an ALSA card. Each surfaces
-// through the same IAudioInput/IAudioOutput/IPttControl the channel already speaks, so KISS
-// packet, POCSAG paging and ARDOP all get every transport for free.
+// receive only), an OpenWebRX receiver's audio (--device openwebrx:..., receive only), a pair
+// of pipes, a recording (--wav-loop), or an ALSA card. Each surfaces through the same
+// IAudioInput/IAudioOutput/IPttControl the channel already speaks, so KISS packet, POCSAG paging
+// and ARDOP all get every transport for free.
 // Keyed off the modem entry, not the legacy --ardop flag: a station configuring ARDOP the
 // documented way (a "mode": "ardop" modem entry) wants the deeper buffer just as much.
 int flexPacketBuffer = ardopModem is null ? 3 : 6;
@@ -2492,9 +2496,9 @@ IAudioOutput playback = opened.Playback;
 IAudioInput input = opened.Input;
 FlexRuntime? flex = opened.Flex;
 flexMeters = opened.FlexMeters;
-// Whether the UberSDR input, in either of its forms, has a session to be starved of. Null for
-// every other device: their quiet is never deliberate.
-Func<bool>? uberSdrSessionLive = opened.SessionLive;
+// Whether a web receiver input (UberSDR in either of its forms, or OpenWebRX) has a session to be
+// starved of. Null for every other device: their quiet is never deliberate.
+Func<bool>? webReceiverSessionLive = opened.SessionLive;
 // Set only on the ALSA path: the sound card is the one device with xrun counters, and they are
 // the difference between "the band is quiet" and "this machine will not schedule us".
 AlsaAudioOutput? alsaOut = opened.AlsaOut;
@@ -2880,7 +2884,7 @@ using var station = new Station(
         DeviceKind = deadFeedDevice,
         DeadFeed = deadFeedConfig,
         BlockMilliseconds = ardopModem is null ? 100 : 20,
-        SessionLive = uberSdrSessionLive,
+        SessionLive = webReceiverSessionLive,
 
         // Built above: the page's clip pill on every station with a meter, and the frame's own
         // clip flag only where there is a converter to have run out of codes.

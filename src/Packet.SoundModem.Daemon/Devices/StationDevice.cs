@@ -109,7 +109,8 @@ internal abstract class StationDevice
 /// </summary>
 /// <param name="UberSdr">The <c>"ubersdr"</c> section, or null.</param>
 /// <param name="HasWaterfall">Whether the station serves a waterfall page.</param>
-internal sealed record DeviceSettings(UberSdrConfig? UberSdr, bool HasWaterfall);
+/// <param name="OpenWebRx">The <c>"openwebrx"</c> section, or null.</param>
+internal sealed record DeviceSettings(UberSdrConfig? UberSdr, bool HasWaterfall, OpenWebRxConfig? OpenWebRx = null);
 
 /// <summary>
 /// What a device needs from the rest of start-up to open itself. Settled by the time the device
@@ -204,9 +205,17 @@ internal sealed class DeviceOpening
     /// <summary>The radio's transmit meters, on a Flex that has them.</summary>
     public M0LTE.Flex.FlexMeters? FlexMeters { get; init; }
 
-    /// <summary>Whether the input has a session to be starved of, on an UberSDR. Null for
+    /// <summary>Whether the input has a session to be starved of, on a web receiver. Null for
     /// every other device: their quiet is never deliberate.</summary>
     public Func<bool>? SessionLive { get; init; }
+
+    /// <summary>
+    /// The receiver's own tuning, on a device the station tunes through the device itself rather
+    /// than through a rig: today an OpenWebRX receiver. Null everywhere else. Nothing at start-up
+    /// uses it once the device is open; it is here so that whatever later wants to move the dial
+    /// (#585's receive window) asks the device, and does not have to know which kind it is.
+    /// </summary>
+    public Packet.SoundModem.Rig.IReceiverTuner? Tuner { get; init; }
 
     /// <summary>The sound card's playback stream, on ALSA.</summary>
     public AlsaAudioOutput? AlsaOut { get; init; }

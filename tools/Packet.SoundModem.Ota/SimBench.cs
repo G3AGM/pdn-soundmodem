@@ -58,12 +58,21 @@ internal static class SimBench
     /// trials.</summary>
     /// <param name="levelDb">Absolute level scale on the post-channel signal+noise (0 = nominal).
     /// The SNR is unchanged; this is the level-invariance axis.</param>
+    /// <param name="adpcmLevelDbfs">When set, the post-channel audio goes through an OpenWebRX
+    /// receiver's ADPCM round trip at this RMS level before the modem hears it
+    /// (<see cref="AdpcmRoundTrip"/>). Frame layer, 12 kHz modes only.</param>
     public static SimPointResult RunPoint(
         string mode, int? rate, SimLayer layer, SimChannelKind kind, double snrDb,
         int bursts, int frameBytes, int firstSeed, int workers, double levelDb = 0,
         int txDelayMs = 0, double cfoHz = 0, PskDetector? detector = null, double? centreHz = null,
-        PskDetector? secondDetector = null, double impulseRatePerMinute = 0, bool bridged = false)
+        PskDetector? secondDetector = null, double impulseRatePerMinute = 0, bool bridged = false,
+        double? adpcmLevelDbfs = null)
     {
+        if (adpcmLevelDbfs is not null && (layer != SimLayer.Frame || ArdopFrameProbe.IsArdopMode(mode)))
+        {
+            throw new ArgumentException("--adpcm applies to the frame layer's catalogue modes only");
+        }
+
         var options = new ParallelOptions { MaxDegreeOfParallelism = Math.Max(1, workers) };
         float levelScale = (float)Math.Pow(10, levelDb / 20.0);
         int successes = 0;
@@ -121,6 +130,11 @@ internal static class SimBench
                         : SimChannel.Apply(active, sm.Rate, kind, snrDb, seed + 3_000_000, cfoHz: cfoHz,
                             impulseRatePerMinute: impulseRatePerMinute);
                     ScaleInPlace(rx, levelScale);
+                    if (adpcmLevelDbfs is double adpcmLevel)
+                    {
+                        rx = AdpcmRoundTrip.Apply(rx, sm.Rate, adpcmLevel);
+                    }
+
                     SimDecode d = sm.Decode(rx, frame);
                     int bits = frameBytes * 8;
                     acc.Successes += d.Matched ? 1 : 0;

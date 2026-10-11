@@ -80,6 +80,11 @@ internal static class SimCommand
                                        Pass 48000 to exercise the ×6/÷6 deployment path.
                   --bridged            build the mode as a station's channel does at --rate: at its
                                        own rate behind the rate bridge when --rate is faster (#648)
+                  --adpcm              put the receive audio through an OpenWebRX receiver's
+                                       4-bit IMA ADPCM round trip before the modem hears it
+                                       (#599): brought to a level, coded, decoded. Frame layer,
+                                       12 kHz modes only; A/B it against the same run without
+                  --adpcm-level <dBFS> the RMS level the round trip codes at (default -20)
                   --seed <n>           first burst seed (default 1)
                   --workers <n>        bounded parallelism (default 4 - shared box)
                   --csv <path>         write one row per point
@@ -120,6 +125,9 @@ internal static class SimCommand
             : null;
         double? centreHz = a.Has("centre") ? a.Dbl("centre", 0) : null;
         bool bridged = a.Has("bridged");
+        bool adpcm = a.Has("adpcm");
+        double adpcmLevelArg = a.Dbl("adpcm-level", AdpcmRoundTrip.DefaultLevelDbfs);
+        double? adpcmLevel = adpcm ? adpcmLevelArg : null;
         bool quiet = a.Has("quiet");
         string? csvPath = a.Str("csv", null);
 
@@ -150,7 +158,8 @@ internal static class SimCommand
 
         Log($"sim {mode} layer={layer} rate={(layer == SimLayer.Packet ? 8000 : effectiveRate)} "
             + $"bursts={bursts} frameBytes={frameBytes} workers={workers}");
-        Log($"channels: {string.Join(',', channels)}  snrs: {string.Join(',', snrs)}");
+        Log($"channels: {string.Join(',', channels)}  snrs: {string.Join(',', snrs)}"
+            + (adpcmLevel is double l ? $"  adpcm round trip at {l:0.#} dBFS" : ""));
 
         bool levelScan = levels.Length > 1 || levels[0] != 0;
         var rows = new List<SimPointResult>();
@@ -165,7 +174,7 @@ internal static class SimCommand
                     {
                     SimPointResult r = SimBench.RunPoint(
                         mode, rateArg, layer, kind, snr, bursts, frameBytes, firstSeed, workers, level,
-                        txDelayMs, cfo, detector, centreHz, detector2, impulseRate, bridged);
+                        txDelayMs, cfo, detector, centreHz, detector2, impulseRate, bridged, adpcmLevel);
                     rows.Add(r);
                     if (level == 0)
                     {

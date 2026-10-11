@@ -83,6 +83,24 @@ internal static class DeviceDiagnostics
         """;
 
     /// <summary>
+    /// An OpenWebRX receiver that would not stream, or cannot serve this station's dial. Same
+    /// "keep retrying" treatment as an UberSDR, for the same reasons; a dial its band does not
+    /// reach can also clear on its own, when somebody moves the receiver back.
+    /// </summary>
+    internal static string OpenWebRx(string device, string? configPath, Exception error) =>
+        $"""
+        cannot listen through "{device}"
+          {error.Message}
+
+        {Source(configPath, "device", "--device")}
+          This names a public OpenWebRX web receiver, which the station listens to instead of a
+          sound card. Check it is up by opening the same address in a browser. The address is
+          the one you would open there, scheme, port and path included. The profile to ask for
+          and the passband live in the "openwebrx" section.
+        {Retry}
+        """;
+
+    /// <summary>
     /// A FlexRadio that would not open a session. Same "keep retrying" treatment as a sound
     /// card, and for the same reason: at a site power-up the modem host routinely boots
     /// faster than the radio, and a network blip is nobody's configuration mistake.

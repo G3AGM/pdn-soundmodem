@@ -18,7 +18,7 @@ internal static class MailcastStation
     internal static MailcastRadio RadioFor(
         MailcastRadioKind kind, RfPlan.Result? bandPlan,
         double? dialFrequency, double? receiveDialHz, string sideband, FlexTuning flexTuning,
-        UberSdrConfig? uberSdrConfig, bool hasRig)
+        UberSdrConfig? uberSdrConfig, bool hasRig, OpenWebRxConfig? openWebRxConfig = null)
     {
         if (kind == MailcastRadioKind.FlexHeadless)
         {
@@ -34,6 +34,14 @@ internal static class MailcastStation
             return new MailcastRadio(
                 MailcastRadioKind.UberSdr, receiveDialHz, bandPlan?.Sideband ?? sideband,
                 uberSdrConfig?.SsbLowHz ?? 150, uberSdrConfig?.SsbHighHz ?? 3450, hasRig);
+        }
+
+        if (kind == MailcastRadioKind.OpenWebRx)
+        {
+            return new MailcastRadio(
+                MailcastRadioKind.OpenWebRx, receiveDialHz, bandPlan?.Sideband ?? sideband,
+                openWebRxConfig?.SsbLowHz ?? OpenWebRxStationDevice.DefaultSsbLowHz,
+                openWebRxConfig?.SsbHighHz ?? OpenWebRxStationDevice.DefaultSsbHighHz, hasRig);
         }
 
         Passband window = bandPlan?.Window ?? Passband.Nominal;
@@ -80,7 +88,7 @@ internal static class MailcastStation
         string sideband = headless && RfPlan.SidebandForSliceMode(flexTuning.Mode) is { } implied ? implied : config.Sideband;
         MailcastRadio radio = RadioFor(
             kind, bandPlan, config.DialFrequency, bandPlan?.DialHz ?? config.DialFrequency,
-            sideband, flexTuning, config.UberSdr, hasRig: config.Rig is not null);
+            sideband, flexTuning, config.UberSdr, hasRig: config.Rig is not null, config.OpenWebRx);
         if (MailcastPlacement.Decide(mailcast, radio, MailcastPlacement.HalfWidthHz(), out string? refusal) is null)
         {
             return refusal;

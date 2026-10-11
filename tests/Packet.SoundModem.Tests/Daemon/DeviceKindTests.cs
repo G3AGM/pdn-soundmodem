@@ -2,6 +2,7 @@ using System.Text.RegularExpressions;
 using AwesomeAssertions;
 using Packet.SoundModem.Daemon;
 using Packet.SoundModem.FlexRadio;
+using Packet.SoundModem.OpenWebRx;
 using Packet.SoundModem.UberSdr;
 
 namespace Packet.SoundModem.Tests.Daemon;
@@ -37,6 +38,8 @@ public class DeviceKindTests
         { "flex:serial=1234-5678@Station", "flex" },
         { "ubersdr:m9psy-1.instance.ubersdr.org", "ubersdr" },
         { "UberSDR:https://example.org:8073/", "ubersdr" },
+        { "openwebrx:http://sdr.example.org:8073/", "openwebrx" },
+        { "OpenWebRX:sdr.example.org", "openwebrx" },
     };
 
     [Theory]
@@ -56,38 +59,44 @@ public class DeviceKindTests
         bool deviceIsFlex = FlexDevice.IsFlex(device);
         bool flexIsHeadless = deviceIsFlex && FlexDevice.Parse(device).Headless;
         bool deviceIsUberSdr = UberSdrDevice.IsUberSdr(device);
+        // A web receiver of the second kind (#599) answers as the first does, except where the
+        // two differ by name: its own dead-feed family and its own mailcast kind.
+        bool deviceIsOpenWebRx = OpenWebRxDevice.IsOpenWebRx(device);
+        bool webReceiver = deviceIsUberSdr || deviceIsOpenWebRx;
         bool flexIsMock = deviceIsFlex
             && FlexDevice.Parse(device).RadioSpec.Equals("mock", StringComparison.OrdinalIgnoreCase);
 
         StationDevice station = DeviceKinds.Resolve(device, wavLoopPath: null, NoSettings);
 
-        station.CaptureRateApplies.Should().Be(!deviceIsFlex && !deviceIsUberSdr);
+        station.CaptureRateApplies.Should().Be(!deviceIsFlex && !webReceiver);
         station.OwnsTheRadio.Should().Be(flexIsHeadless);
         station.Kind.OwnsTheRadio(device).Should().Be(flexIsHeadless);
-        station.SelfTunes.Should().Be(flexIsHeadless || deviceIsUberSdr);
+        station.SelfTunes.Should().Be(flexIsHeadless || webReceiver);
         station.ReportsTransmitFilter.Should().Be(deviceIsFlex);
         station.ClosesItsOwnStreams.Should().Be(deviceIsFlex);
-        (station.PttRefusal is not null).Should().Be(deviceIsFlex || deviceIsUberSdr);
-        (station.ReceiveOnlyReason is not null).Should().Be(deviceIsUberSdr);
-        (station.NoReceiveDialRefusal is not null).Should().Be(deviceIsUberSdr);
-        (station.Kind.TransmitTestRefusal is not null).Should().Be(deviceIsUberSdr);
-        (station.Kind.RigRefusal(device) is not null).Should().Be(deviceIsFlex || deviceIsUberSdr);
-        (station.Kind.PublishRefusal(device) is not null).Should().Be(deviceIsUberSdr);
+        (station.PttRefusal is not null).Should().Be(deviceIsFlex || webReceiver);
+        (station.ReceiveOnlyReason is not null).Should().Be(webReceiver);
+        (station.NoReceiveDialRefusal is not null).Should().Be(webReceiver);
+        (station.Kind.TransmitTestRefusal is not null).Should().Be(webReceiver);
+        (station.Kind.RigRefusal(device) is not null).Should().Be(deviceIsFlex || webReceiver);
+        (station.Kind.PublishRefusal(device) is not null).Should().Be(webReceiver);
         station.SettingsProblem.Should().BeNull();
 
         station.MailcastKind.Should().Be(
             flexIsHeadless ? MailcastRadioKind.FlexHeadless
             : deviceIsUberSdr ? MailcastRadioKind.UberSdr
+            : deviceIsOpenWebRx ? MailcastRadioKind.OpenWebRx
             : deviceIsFlex ? MailcastRadioKind.FlexAttach
             : MailcastRadioKind.SoundCard);
 
         station.DeadFeedKind.Should().Be(
             deviceIsUberSdr ? DeadFeedDevice.UberSdr
+            : deviceIsOpenWebRx ? DeadFeedDevice.OpenWebRx
             : deviceIsFlex ? (flexIsMock ? DeadFeedDevice.WavLoop : DeadFeedDevice.Flex)
             : DeadFeedDevice.Alsa);
 
         DaemonConfig.IsSoundCard(device).Should().Be(
-            !deviceIsFlex && !deviceIsUberSdr && !PipeAudio.IsPipe(device));
+            !deviceIsFlex && !webReceiver && !PipeAudio.IsPipe(device));
     }
 
     [Theory]
@@ -155,6 +164,64 @@ public class DeviceKindTests
         DeviceKinds.Resolve(device, null, new DeviceSettings(
                 new UberSdrConfig { OnDemand = false, LingerSeconds = -1 }, HasWaterfall: false))
             .SettingsProblem.Should().BeNull("the linger means nothing to an always-on session");
+    }
+
+    [Fact]
+    public void An_OpenWebRx_Receiver_Says_Which_Receiver_It_Cannot_Transmit_Through()
+    {
+        StationDevice station = DeviceKinds.Resolve(
+            "openwebrx:https://sdr.example.org/owrx/", wavLoopPath: null, NoSettings);
+
+        station.ReceiveOnlyReason.Should().Be(
+            "this station receives only: its audio comes from the OpenWebRX receiver at "
+            + "sdr.example.org/owrx, which is a receiver and has no transmitter.");
+        station.PttRefusal.Should().StartWith("--device openwebrx: is a receive-only station");
+        station.Kind.PublishRefusal("openwebrx:https://sdr.example.org/owrx/").Should().Contain(
+            "somebody else's public web receiver");
+    }
+
+    [Fact]
+    public void A_Malformed_OpenWebRx_Device_Is_Refused_When_It_Is_Resolved()
+    {
+        Action resolve = () => DeviceKinds.Resolve("openwebrx:", wavLoopPath: null, NoSettings);
+
+        resolve.Should().Throw<InvalidDataException>().WithMessage("*names no receiver*");
+    }
+
+    [Theory]
+    [InlineData(null, null, null, null, null, null)]
+    [InlineData(300, 2700, null, null, null, null)]
+    [InlineData(0, 6000, 6000, 0, 2.0, null)]
+    [InlineData(2700, 300, null, null, null, "*\"ssbLowHz\" and \"ssbHighHz\" (2700 and 300)*")]
+    [InlineData(150, 6001, null, null, null, "*at most 6000 Hz*")]
+    [InlineData(-1, 3000, null, null, null, "*\"ssbLowHz\"*")]
+    [InlineData(null, null, 0, null, null, "*\"fmHalfWidthHz\" (0)*")]
+    [InlineData(null, null, 7000, null, null, "*\"fmHalfWidthHz\" (7000)*")]
+    [InlineData(null, null, null, -5, null, "*\"startupGuardMs\" cannot be negative")]
+    [InlineData(null, null, null, null, 0.0, "*\"gain\" has to be above 0")]
+    public void An_OpenWebRx_Section_Is_Checked_Before_Anything_Is_Opened(
+        int? low, int? high, int? fmHalfWidth, int? guard, double? gain, string? problem)
+    {
+        var config = new OpenWebRxConfig
+        {
+            SsbLowHz = low,
+            SsbHighHz = high,
+            FmHalfWidthHz = fmHalfWidth,
+            StartupGuardMs = guard,
+            Gain = gain,
+        };
+
+        string? said = DeviceKinds.Resolve(
+            "openwebrx:sdr.example.org", null, new DeviceSettings(null, HasWaterfall: false, config)).SettingsProblem;
+
+        if (problem is null)
+        {
+            said.Should().BeNull();
+        }
+        else
+        {
+            said.Should().Match(problem);
+        }
     }
 
     [Fact]

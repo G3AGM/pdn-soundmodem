@@ -302,6 +302,10 @@ internal sealed class Station : IDisposable
             $"receive feed dead: {silenceSeconds:F0} s of unbroken digital silence from the "
             + "receiver's IQ stream - its SDR feed has likely died - restarting to reconnect "
             + "afresh",
+        DeadFeedDevice.OpenWebRx =>
+            $"receive feed dead: {silenceSeconds:F0} s of unbroken digital silence from the "
+            + "receiver's audio stream - its SDR feed has likely died - restarting to reconnect "
+            + "afresh",
         _ =>
             $"receive feed dead: {silenceSeconds:F0} s of unbroken digital silence from the sound "
             + "device - restarting (\"deadFeed\".\"silenceSeconds\" asked for this watch; a "
@@ -316,7 +320,7 @@ internal sealed class Station : IDisposable
                 $"receive feed starved: no samples from the radio for {starvationSeconds:F0} s "
                 + "- the DAX stream has stopped while the session looks alive - restarting to "
                 + "rebuild it",
-            DeadFeedDevice.UberSdr =>
+            DeadFeedDevice.UberSdr or DeadFeedDevice.OpenWebRx =>
                 $"receive feed starved: an open session delivered no audio for "
                 + $"{starvationSeconds:F0} s - a hung stream - restarting to reconnect afresh",
             DeadFeedDevice.Uplink =>
@@ -500,6 +504,10 @@ internal sealed record StationOptions
     /// watching - is declared by <see cref="SessionLive"/> and postpones starvation; a receiver
     /// unreachable past five minutes is the input's own <c>Lost</c> event, which the host
     /// handles, so no death is reported two ways.</description></item>
+    /// <item><description><b>openwebrx</b> - the same as ubersdr, on the receiver's demodulated
+    /// audio rather than its IQ. A session counts as live only once it has delivered audio and
+    /// while the receiver's band reaches the dial; before the first audio the input times a
+    /// silent session out itself.</description></item>
     /// <item><description><b>alsa</b> - <c>AlsaPcm.Read</c> BLOCKS until the span fills and never
     /// returns 0, which is why starvation is polled from a timer and not from the loop. A card
     /// that dies outright (USB unplug: -ENODEV) makes <c>Read</c> throw. Silence is off by

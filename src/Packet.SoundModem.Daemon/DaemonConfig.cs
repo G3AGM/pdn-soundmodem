@@ -920,6 +920,51 @@ public sealed class UberSdrConfig
 }
 
 /// <summary>
+/// Stream parameters used only when Device is <c>openwebrx:&lt;url&gt;</c> - a receive-only
+/// station listening to a public OpenWebRX or OpenWebRX+ receiver's demodulated audio. Ignored
+/// for every other device. Where to tune is not here: that comes from the band plan.
+/// </summary>
+/// <remarks>
+/// The receiver demodulates, so this chooses only which demodulator (from the band plan's
+/// sideband: USB, LSB, or narrow FM for <c>"sideband": "fm"</c>) and the passband it is asked
+/// for. Its AGC and its audio compression are the receiver operator's.
+/// </remarks>
+public sealed class OpenWebRxConfig
+{
+    /// <summary>
+    /// The receiver profile to ask for: its id (<c>sdr|profile</c>) or its name as the
+    /// receiver's page lists it. Asking moves the receiver for everyone listening to it, so it is
+    /// asked once a session and never fought over. Null (the default) listens on whatever band
+    /// the receiver is on, and start-up stops if that band does not reach the dial.
+    /// </summary>
+    public string? Profile { get; set; }
+
+    /// <summary>Bottom of the SSB passband to ask for, in Hz from the dial (mirrored for LSB).
+    /// Default 150.</summary>
+    public int? SsbLowHz { get; set; }
+
+    /// <summary>Top of the SSB passband to ask for, in Hz from the dial. Default 3450; at most
+    /// 6000, the top of the receiver's 12 kHz audio.</summary>
+    public int? SsbHighHz { get; set; }
+
+    /// <summary>Half the width of the FM channel filter to ask for, in Hz, for
+    /// <c>"sideband": "fm"</c>. Default 5000; at most 6000.</summary>
+    public int? FmHalfWidthHz { get; set; }
+
+    /// <summary>Audio discarded after each connect, in ms, while the receiver's AGC settles.
+    /// Default 1000.</summary>
+    public int? StartupGuardMs { get; set; }
+
+    /// <summary>Linear gain on the received audio; 1.0 (the default) is the receiver's own
+    /// scaling.</summary>
+    public double? Gain { get; set; }
+
+    /// <summary>Keys in this section the daemon does not know; reported at start-up.</summary>
+    [JsonExtensionData]
+    public Dictionary<string, JsonElement>? UnknownSettings { get; set; }
+}
+
+/// <summary>
 /// Flavour B: one daemon fronting many UberSDR web receivers, with a page that lists them and a
 /// visitor picking one. Null (the default) is flavour A, one receiver or one radio per process.
 /// </summary>
@@ -1174,6 +1219,11 @@ public enum DeadFeedDevice
     /// <summary>An UberSDR web receiver's IQ stream (<c>ubersdr:</c> device).</summary>
     UberSdr,
 
+    /// <summary>An OpenWebRX web receiver's audio stream (<c>openwebrx:</c> device). The
+    /// UberSDR family's watches: a receiver with its squelch open always carries noise, and a
+    /// session that has delivered and then stops is a hung stream.</summary>
+    OpenWebRx,
+
     /// <summary>A bench input with no radio behind it: a recording replayed as the capture
     /// device (<c>--wav-loop</c>), or the in-process mock radio (<c>flex:mock</c>), whose
     /// DAX-RX path deliberately delivers nothing between injected frames.</summary>
@@ -1239,7 +1289,7 @@ public sealed class DeadFeedConfig
     {
         (double silence, double starvation) = device switch
         {
-            DeadFeedDevice.Flex or DeadFeedDevice.UberSdr => (30.0, 30.0),
+            DeadFeedDevice.Flex or DeadFeedDevice.UberSdr or DeadFeedDevice.OpenWebRx => (30.0, 30.0),
             DeadFeedDevice.Alsa or DeadFeedDevice.Uplink => (0.0, 30.0),
             _ => (0.0, 0.0),
         };
@@ -1579,6 +1629,10 @@ public sealed class DaemonConfig
     /// <summary>UberSDR stream params (Device <c>ubersdr:</c>); null = defaults. Ignored for
     /// every other device.</summary>
     public UberSdrConfig? UberSdr { get; set; }
+
+    /// <summary>OpenWebRX stream params (Device <c>openwebrx:</c>); null = defaults. Ignored for
+    /// every other device.</summary>
+    public OpenWebRxConfig? OpenWebRx { get; set; }
 
     /// <summary>Browser waterfall endpoint; null = disabled.</summary>
     public WaterfallConfig? Waterfall { get; set; }
@@ -2778,6 +2832,7 @@ public sealed class DaemonConfig
 
         Unknown("api", config.Api?.UnknownSettings);
         Unknown("ubersdr", config.UberSdr?.UnknownSettings);
+        Unknown("openwebrx", config.OpenWebRx?.UnknownSettings);
         Unknown("frameLog", config.FrameLog?.UnknownSettings);
         Unknown("survey", config.Survey?.UnknownSettings);
         Unknown("rawCapture", config.RawCapture?.UnknownSettings);

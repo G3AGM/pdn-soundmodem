@@ -17,6 +17,7 @@ By the end of this page you will know which `device` string and which `ptt` bloc
 | A USB sound card, or a CM108-class interface | `plughw:CARD=Device,DEV=0` |
 | A FlexRadio on the LAN | `flex:10.45.0.76` |
 | A public UberSDR web receiver | `ubersdr:m9psy-1.instance.ubersdr.org` |
+| A public OpenWebRX or OpenWebRX+ receiver | `openwebrx:http://sdr.example.org:8073/` |
 | Two FIFOs standing in for a card | `pipe:/tmp/in,/tmp/out` |
 | Nothing at all | `null` |
 
@@ -221,7 +222,7 @@ You want one `audio:` line naming your device, and one `ptt:` line if you config
 
 `cannot open the cm108 PTT device "..."` with `Access to the path '/dev/hidraw0' is denied.` under it means the udev rule is missing or has the wrong IDs. Add it, replug, restart.
 
-`--device flex: keys the radio itself; remove the conflicting --ptt (serial:/cm108:)` means what it says. Delete the `ptt` section. The same goes for `ubersdr:`, which has no transmitter.
+`--device flex: keys the radio itself; remove the conflicting --ptt (serial:/cm108:)` means what it says. Delete the `ptt` section. The same goes for `ubersdr:` and `openwebrx:`, which have no transmitter.
 
 `rig: WARNING - cannot reach rigctld at ...` means rigctld is not running, or is on another port. Start it, and the station picks it up within half a minute.
 

@@ -17,6 +17,9 @@ internal enum MailcastRadioKind
 
     /// <summary>An UberSDR web receiver, tuned by this station to its dial.</summary>
     UberSdr,
+
+    /// <summary>An OpenWebRX web receiver, tuned by this station to its dial.</summary>
+    OpenWebRx,
 }
 
 /// <summary>What the station hears, as far as start-up knows it.</summary>
@@ -172,6 +175,9 @@ internal sealed record MailcastPlacement(bool Retunes, double AudioCentreHz, dou
             MailcastRadioKind.UberSdr =>
                 "A web receiver is not retuned for it: set \"dialFrequency\" or the band plan so the signal "
                 + "falls inside \"ubersdr\".\"ssbLowHz\" to \"ssbHighHz\".",
+            MailcastRadioKind.OpenWebRx =>
+                "A web receiver is not retuned for it: set \"dialFrequency\" or the band plan so the signal "
+                + "falls inside \"openwebrx\".\"ssbLowHz\" to \"ssbHighHz\".",
             _ when !radio.HasRig =>
                 "Add a \"rig\" section (rigctld) and \"mailcast\".\"retune\": true, and the rig is retuned "
                 + "to it around each slot and put back; or tune so the signal's audio centre falls "
