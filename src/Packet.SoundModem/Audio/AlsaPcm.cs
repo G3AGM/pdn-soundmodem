@@ -206,6 +206,9 @@ public sealed class AlsaPcm : IDisposable, IPcmTransfer
         return Transfer(interleaved, "snd_pcm_readi");
     }
 
+    // A fault ReadUntilOverrun met after it had frames to return, left for its next call.
+    private int _deferredHole;
+
     /// <summary>Reads interleaved frames (capture PCM), as <see cref="Read"/> does, except that an
     /// overrun ends the read: the frames returned never span one. The overrun is counted in
     /// <see cref="Xruns"/>, and recovered, by the call that returns the first frames after it, so
@@ -460,7 +463,7 @@ public sealed class AlsaPcm : IDisposable, IPcmTransfer
             fixed (short* p = interleaved)
             {
                 _transferBuffer = (IntPtr)p;
-                moved = PcmTransfer.Run(this, frameCount, out failure, stopAtXrun);
+                moved = PcmTransfer.Run(this, frameCount, out failure, stopAtXrun, ref _deferredHole);
                 _transferBuffer = IntPtr.Zero;
             }
         }

@@ -17,6 +17,9 @@ public interface IStereoCapture : IDisposable
     /// </summary>
     long Overruns { get; }
 
+    /// <summary>The card's buffer, frames: about what an overrun throws away. 0 where unknown.</summary>
+    int BufferFrames { get; }
+
     /// <summary>
     /// Reads interleaved <c>left, right</c> frames into <paramref name="interleaved"/>. Blocks
     /// until at least one frame is there. Stops short at an overrun rather than reading across it,

@@ -116,6 +116,12 @@ public sealed class SoundCardIqSource : IIqSource, IDisposable
     private bool _reported;
     private long _lastReadEnd;
     private long _pendingCentreBits;
+    private bool _lastReadShort;
+    private volatile bool _closing;
+    private readonly ManualResetEventSlim _idle = new(initialState: true);
+
+    /// <summary>How long <see cref="Dispose"/> waits for a running read: past the kernel's 10 s.</summary>
+    internal static readonly TimeSpan CloseWait = TimeSpan.FromSeconds(12);
 
     /// <summary>A source over <paramref name="capture"/>, which it owns from here on.</summary>
     /// <exception cref="ArgumentException">The options cannot be used; the message says why.</exception>
@@ -167,7 +173,9 @@ public sealed class SoundCardIqSource : IIqSource, IDisposable
     public long Overruns => _capture.Overruns;
 
     /// <summary>The balance measured on the card so far, before any correction: null until there
-    /// is a second's worth. Read on the reader's thread.</summary>
+    /// is a second's worth, and always null when there is no journal to report it to (or
+    /// <see cref="SoundCardIqOptions.BalanceReportSeconds"/> is 0), since it is not measured then.
+    /// Read on the reader's thread.</summary>
     public IqBalance? MeasuredBalance => _meter.Frames >= SampleRate ? _meter.Balance() : null;
 
     /// <summary>
@@ -194,37 +202,69 @@ public sealed class SoundCardIqSource : IIqSource, IDisposable
             throw new ArgumentException("room for at least one I, Q pair is needed", nameof(interleaved));
         }
 
-        double pending = BitConverter.Int64BitsToDouble(Interlocked.Read(ref _pendingCentreBits));
-        if (pending != CentreFrequencyHz)
+        _idle.Reset();
+        try
         {
-            CentreFrequencyHz = pending;
-            TuningGeneration++;
-        }
+            if (_closing)
+            {
+                return 0;
+            }
 
-        long overruns = _capture.Overruns;
-        int got = _capture.Read(_pcm.AsSpan(0, 2 * frames));
-        long now = _options.TimeProvider.GetTimestamp();
-        if (got <= 0)
+            long overruns = _capture.Overruns;
+            int got = _capture.Read(_pcm.AsSpan(0, 2 * frames));
+            long now = _options.TimeProvider.GetTimestamp();
+            if (got <= 0)
+            {
+                return 0;
+            }
+
+            if (_capture.Overruns != overruns)
+            {
+                // How long the reader was away that this block does not account for, and, when
+                // the block before was cut short by the hole, what the card was holding when it
+                // overran, which the recovery threw away and the time away does not see.
+                double away = _lastReadEnd == 0
+                    ? 0
+                    : _options.TimeProvider.GetElapsedTime(_lastReadEnd, now).TotalSeconds - ((double)got / SampleRate);
+                long held = _lastReadShort ? _capture.BufferFrames : 0;
+                SamplesLost += Math.Max(1, (long)Math.Round(away * SampleRate) + held);
+            }
+
+            _lastReadShort = got < frames;
+            _lastReadEnd = now;
+
+            // A centre moved meanwhile is the tuning of this block: the news is no more precise.
+            double pending = BitConverter.Int64BitsToDouble(Interlocked.Read(ref _pendingCentreBits));
+            if (pending != CentreFrequencyHz)
+            {
+                CentreFrequencyHz = pending;
+                TuningGeneration++;
+            }
+
+            Convert(_pcm.AsSpan(0, 2 * got), interleaved);
+            return 2 * got;
+        }
+        finally
         {
-            return 0;
+            _idle.Set();
         }
-
-        if (_capture.Overruns != overruns)
-        {
-            // How long the reader was away that this block does not account for.
-            double away = _lastReadEnd == 0
-                ? 0
-                : _options.TimeProvider.GetElapsedTime(_lastReadEnd, now).TotalSeconds - ((double)got / SampleRate);
-            SamplesLost += Math.Max(1, (long)Math.Round(away * SampleRate));
-        }
-
-        _lastReadEnd = now;
-        Convert(_pcm.AsSpan(0, 2 * got), interleaved);
-        return 2 * got;
     }
 
-    /// <summary>Closes the card.</summary>
-    public void Dispose() => _capture.Dispose();
+    /// <summary>
+    /// Closes the card, once no read is running on it: closing an ALSA capture under a
+    /// <c>snd_pcm_readi</c> on another thread is not something alsa-lib supports. A read that is
+    /// still running after <see cref="CloseWait"/> (a card that stopped clocking, which the kernel
+    /// gives up on after 10 s) leaves the card open rather than risk it; the process is on its way
+    /// out by then.
+    /// </summary>
+    public void Dispose()
+    {
+        _closing = true;
+        if (_idle.Wait(CloseWait))
+        {
+            _capture.Dispose();
+        }
+    }
 
     private void Convert(ReadOnlySpan<short> pcm, Span<float> iq)
     {

@@ -35,6 +35,9 @@ public sealed class AlsaStereoCapture : IStereoCapture
     /// <inheritdoc />
     public long Overruns => _pcm.Xruns;
 
+    /// <inheritdoc />
+    public int BufferFrames => _pcm.BufferFrames;
+
     /// <summary>The buffer the card gave us, in milliseconds (0 if it would not say).</summary>
     public int BufferMilliseconds => _pcm.BufferMilliseconds;
 

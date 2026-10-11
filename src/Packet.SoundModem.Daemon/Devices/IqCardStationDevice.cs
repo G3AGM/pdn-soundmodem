@@ -218,6 +218,15 @@ internal sealed class IqCardStationDevice(
 
             centreHz = known + centreOffset;
             followRig = true;
+            if (!(centreHz > 0))
+            {
+                Console.Error.WriteLine(
+                    $"\"device\": \"{Spec}\" takes its IQ centre from the rig's dial, {RfPlan.Mhz(known)}, plus "
+                    + "\"iqCard\".\"centreOffsetHz\", which comes to "
+                    + string.Create(CultureInfo.InvariantCulture, $"{centreHz:F0} Hz")
+                    + ", not a frequency. Check the offset's sign and size.");
+                return DeviceOpening.Refused(2);
+            }
         }
         else
         {
@@ -282,14 +291,29 @@ internal sealed class IqCardStationDevice(
         Action<RigState>? follow = null;
         if (followRig)
         {
+            // On RigControl's thread, which does not expect a handler to throw: a centre that is
+            // not a frequency is said and skipped rather than thrown.
             follow = state =>
             {
                 if (state.Tuning is RigTuning tuning)
                 {
-                    source.SetCentreFrequency(tuning.DialHz + centreOffset);
+                    double moved = tuning.DialHz + centreOffset;
+                    if (moved > 0)
+                    {
+                        source.SetCentreFrequency(moved);
+                    }
+                    else
+                    {
+                        journal.WriteError(
+                            $"iqcard: the rig is at {RfPlan.Mhz(tuning.DialHz)}, and with \"centreOffsetHz\" "
+                            + "that is no frequency to centre the IQ on; the centre is left where it was");
+                    }
                 }
             };
             rig!.Changed += follow;
+
+            // The rig may have reported, or moved, between the read above and the subscription.
+            follow(rig.Snapshot());
         }
 
         journal.Write(

@@ -90,6 +90,9 @@ internal sealed class RecordedStereoCapture(int sampleRate, short[] pcm) : ISter
     public long Overruns => 0;
 
     /// <inheritdoc/>
+    public int BufferFrames => 0;
+
+    /// <inheritdoc/>
     public int Read(Span<short> interleaved)
     {
         int frames = Math.Min(interleaved.Length / 2, (pcm.Length - _at) / 2);

@@ -126,6 +126,24 @@ public sealed class SoundCardIqSourceTests
     }
 
     [Fact]
+    public void An_Overrun_That_Cut_A_Read_Short_Counts_What_The_Card_Was_Holding()
+    {
+        var clock = new FakeTimeProvider();
+        var card = new ScriptedCapture(Rate, new short[2 * 48000]) { Clock = clock, BufferFrames = 24000 };
+        using var source = new SoundCardIqSource(card, new SoundCardIqOptions { TimeProvider = clock });
+        var iq = new float[2 * 4800];
+        source.Read(iq);
+
+        // The read meets the overrun 1000 frames in, and the next is the first after the restart.
+        card.CutNextReadTo = 1000;
+        source.Read(iq).Should().Be(2 * 1000);
+        card.OverrunBeforeNextRead = true;
+        source.Read(iq);
+
+        source.SamplesLost.Should().Be(24000, "the buffer the recovery threw away is the loss");
+    }
+
+    [Fact]
     public void An_Overrun_With_No_Time_Away_To_Show_For_It_Still_Counts_One_Sample()
     {
         var clock = new FakeTimeProvider();
@@ -277,6 +295,11 @@ public sealed class SoundCardIqSourceTests
 
         public long Overruns { get; private set; }
 
+        public int BufferFrames { get; init; }
+
+        /// <summary>End the next read short, as an overrun mid-read does.</summary>
+        public int? CutNextReadTo { get; set; }
+
         /// <summary>Count an overrun on the next read, as ALSA's recovery does.</summary>
         public bool OverrunBeforeNextRead { get; set; }
 
@@ -295,6 +318,12 @@ public sealed class SoundCardIqSourceTests
             {
                 OverrunBeforeNextRead = false;
                 Overruns++;
+            }
+
+            if (CutNextReadTo is int cut)
+            {
+                CutNextReadTo = null;
+                frames = Math.Min(frames, cut);
             }
 
             pcm.AsSpan(_at, 2 * frames).CopyTo(interleaved);
