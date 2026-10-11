@@ -2927,12 +2927,13 @@ using var station = new Station(
             : () => (alsaIn?.Xruns ?? 0, alsaOut?.Xruns ?? 0),
 
         // What the channel audio stream marks as a gap (issue #584): a capture overrun on a sound
-        // card, a DAX packet the radio never delivered on a Flex.
+        // card, a DAX packet the radio never delivered on a Flex, a retune or a lost stretch of IQ
+        // on a device behind the IQ front end (issue #594).
         InputLossCount = alsaIn is not null
             ? () => alsaIn.Xruns
             : flex?.Input is M0LTE.Flex.FlexAudioInput flexInput
                 ? () => flexInput.PacketsLost
-                : null,
+                : opened.InputLossCount,
 
         HealthChecks =
         [
