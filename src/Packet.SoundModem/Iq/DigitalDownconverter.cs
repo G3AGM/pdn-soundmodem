@@ -6,9 +6,9 @@ namespace Packet.SoundModem.Iq;
 /// <summary>
 /// Digital down-converter: shifts one channel from a frequency offset (relative to the
 /// IQ centre) down to complex baseband with an NCO mix, band-limits it with an anti-alias
-/// low-pass, and decimates by an integer factor to the channel's DSP rate. This is the front
-/// end that turns one wide DAX-IQ stream into per-channel baseband - run several in parallel for
-/// multi-channel receive (<see cref="MultiChannelReceiver"/>).
+/// low-pass, and decimates by an integer factor to the channel's DSP rate. For receive from an
+/// IQ source use <see cref="IqReceiver"/>, which decimates before it filters and demodulates
+/// SSB and FM; this class filters at the source rate.
 /// </summary>
 /// <remarks>
 /// Textbook NCO + decimating FIR - no ported code. The FIR is designed at construction by the
