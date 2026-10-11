@@ -467,6 +467,48 @@ public class OnDemandUberSdrInputTests
     /// </summary>
     private static readonly TimeSpan HangGuard = TimeSpan.FromMinutes(1);
 
+    [Fact]
+    public async Task Each_Session_After_The_First_Counts_As_One_Hole_And_The_Sessions_Own_Losses_Carry_Over()
+    {
+        using var h = new Harness();
+        FakeSession first = await h.GoLiveAsync();
+        h.Input.Discontinuities.Should().Be(0, "the first session follows nothing");
+
+        first.Discontinuities = 3; // say it dropped three samples
+        h.Input.Discontinuities.Should().Be(3, "the open session's own losses are this input's");
+
+        // Everybody leaves, the linger runs out, and somebody comes back after a quiet spell.
+        h.Input.SetViewers(0);
+        h.Time.Advance(Linger);
+        await h.Announced(OnDemandPhase.Idle);
+        h.Input.Discontinuities.Should().Be(3, "closing a session does not lose what it counted");
+
+        FakeSession second = await h.GoLiveAsync();
+        h.Input.Discontinuities.Should().Be(4,
+            "nobody heard the time between the two sessions, so the new one follows a hole");
+
+        second.Discontinuities = 1;
+        h.Input.Discontinuities.Should().Be(5);
+    }
+
+    [Fact]
+    public async Task A_Session_That_Gave_Up_Keeps_Its_Losses_And_Its_Replacement_Follows_A_Hole()
+    {
+        using var h = new Harness();
+        FakeSession first = await h.GoLiveAsync();
+        first.Discontinuities = 2;
+
+        first.GiveUp("rx.example.org has been unreachable for 5 minutes");
+        await h.Announced(OnDemandPhase.Retrying);
+        h.Input.Discontinuities.Should().Be(2, "a session that gave up does not take its losses with it");
+
+        h.Time.Advance(TimeSpan.FromSeconds(1));
+        (await h.NextAttemptAsync()).SetResult(new FakeSession { SessionLive = true });
+        await h.Announced(OnDemandPhase.Live);
+
+        h.Input.Discontinuities.Should().Be(3, "five minutes unreachable is a stretch nobody heard");
+    }
+
     private static TimeoutException Hung(string what) =>
         new($"nothing happened for {HangGuard.TotalSeconds:F0} s while waiting for {what}: a hang, not a slow run");
 
@@ -489,6 +531,10 @@ public class OnDemandUberSdrInputTests
             new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public bool SessionLive { get; set; }
+
+        /// <summary>The session's own loss count, as a test sets it.</summary>
+        public long Discontinuities { get; set; }
+
         public bool Disposed => _disposed.Task.IsCompleted;
 
         /// <summary>Completes when the input disposes the session, which it does off the test's

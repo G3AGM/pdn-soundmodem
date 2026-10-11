@@ -33,7 +33,7 @@ namespace Packet.SoundModem.Waterfall;
 /// <para><b>Gaps.</b> Two kinds of loss are marked the same way. A slow reader's own queue
 /// overflowing drops whole blocks, and the sample index jumps by exactly what was dropped. Audio
 /// the input lost (<see cref="OnInputLost"/>, from <see cref="SoundModemChannel.ReceiveAudioLost"/>:
-/// an overrun, a lost radio packet, a stalled input) never reached the channel at all and nobody
+/// an overrun, a lost radio packet, a web receiver's session picked up again) never reached the channel at all and nobody
 /// knows how much it was, so the index does not move for it; the gap flag alone says the two
 /// sides of it are not one signal.</para>
 /// <para><b>The requested band.</b> A connection may name a band it needs to hear

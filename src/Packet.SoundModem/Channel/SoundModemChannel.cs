@@ -1158,7 +1158,8 @@ public sealed class SoundModemChannel
 
     /// <summary>
     /// Says that the input lost audio here: an overrun on a sound card, a packet the radio's
-    /// stream never delivered, an input that stalled and came back. The next block passed to
+    /// stream never delivered, a web receiver's session picked up again. Audio that is merely
+    /// late is not a hole and is never said here. The next block passed to
     /// <see cref="ProcessReceive"/> is the first one after the hole.
     /// </summary>
     /// <remarks>

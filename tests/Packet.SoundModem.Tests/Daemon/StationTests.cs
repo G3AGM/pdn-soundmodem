@@ -620,16 +620,32 @@ public class StationTests : IDisposable
     }
 
     [Fact]
-    public async Task An_Input_That_Stalled_And_Came_Back_Is_Told_To_The_Channel_Once()
+    public async Task Reads_That_Return_Nothing_And_Then_Deliver_Mark_No_Gap()
     {
-        // Two reads with nothing (a Flex or a web receiver that stopped delivering), then audio.
+        // Two reads with nothing, then audio: an UberSDR, OpenWebRX or Flex input whose source
+        // was late. Each of them buffers what arrives, so the next block is the audio that was
+        // late, whole, and nothing was lost. Marking a gap here was the 2026-10-11 bug: dozens
+        // of false gaps a slot on ubersdr:, each one resetting a reader's MS110D modem.
         var input = new ScriptedInput(12000, [true, false, false, true, true]);
 
         List<string> seen = await ChannelSequenceAsync(input, 5);
 
-        seen.Should().StartWith(["1", "lost", "4", "5"],
-            "whatever the input should have delivered while it was stalled is gone");
-        seen.Count(s => s == "lost").Should().Be(1, "one hole, however many empty reads it took");
+        seen.Should().StartWith(["1", "4", "5"], "a late block follows nothing that was lost");
+        seen.Should().NotContain("lost", "only the input's own loss counter says audio went missing");
+    }
+
+    [Fact]
+    public async Task A_Loss_After_Empty_Reads_Marks_Exactly_The_Block_That_Follows_It()
+    {
+        // Empty reads first, then the counter moves on a read that delivers: one mark, on that
+        // block, and none for the empty reads before it.
+        var input = new ScriptedInput(12000, [true, false, false, true, true, true]) { LoseOnRead = 4 };
+
+        List<string> seen = await ChannelSequenceAsync(input, 6);
+
+        seen.Should().StartWith(["1", "4", "lost", "5", "6"],
+            "the counter moved during the fifth read, so its block, and only its block, follows a hole");
+        seen.Count(s => s == "lost").Should().Be(1);
     }
 
     [Fact]

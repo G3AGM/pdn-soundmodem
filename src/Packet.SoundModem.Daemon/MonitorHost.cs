@@ -844,6 +844,10 @@ internal sealed class MonitorHost : IAsyncDisposable
                         SessionLive = () => input.SessionLive,
                         TimeProvider = _host._time,
                         HealthChecks = [FrameLogDropCheck()],
+
+                        // What the channel audio stream marks as a gap: a session picked up
+                        // again, or audio dropped. An empty Read is not one.
+                        InputLossCount = () => input.Discontinuities,
                     },
                     _host._stopping.Token);
                 _station = station;

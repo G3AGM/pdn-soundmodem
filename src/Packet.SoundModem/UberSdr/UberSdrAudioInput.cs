@@ -91,6 +91,9 @@ public sealed class UberSdrAudioInput : IUberSdrSession
     private int _count;
     private long _dropped;
     private long _droppedReported;
+    private long _resumed;
+    private long _lossAtRead;
+    private int _sessionsHeard; // pump thread only
     private long _published;
     private bool _ended;
     private bool _sessionLive;
@@ -141,6 +144,21 @@ public sealed class UberSdrAudioInput : IUberSdrSession
     /// <summary>Samples dropped because nothing drained the buffer in time. Non-zero means the
     /// box cannot keep up, and is reported rather than hidden.</summary>
     public long DroppedSamples => Interlocked.Read(ref _dropped);
+
+    /// <summary>
+    /// A running count that moves whenever the audio this input hands out has a hole in it:
+    /// every sample dropped because the buffer filled, plus one for each session after the
+    /// first that delivers audio (a reconnect, or the ordinary renewal at the receiver's
+    /// session limit, leaves the time in between unheard). The daemon reads it once per block
+    /// and marks the block that follows a move as following lost audio. A <see cref="Read"/>
+    /// that returns nothing is not a hole: the ring holds what has arrived, and audio that is
+    /// late is still delivered whole.
+    /// </summary>
+    /// <remarks>The count as of the last <see cref="Read"/> that delivered audio, taken under
+    /// the ring's lock with the samples it handed out. Read straight off the live counters, a
+    /// session's first audio published between a Read returning and the reader asking would
+    /// have put the mark one block early, on audio from before the hole.</remarks>
+    public long Discontinuities => Interlocked.Read(ref _lossAtRead);
 
     /// <summary>
     /// True while an IQ session is open and expected to be delivering audio; false between
@@ -280,6 +298,9 @@ public sealed class UberSdrAudioInput : IUberSdrSession
                 }
             }
 
+            // The count as of the samples about to be handed out: every hole it includes lies
+            // before them, so a reader that compares it after this Read marks the right block.
+            Interlocked.Exchange(ref _lossAtRead, _dropped + _resumed);
             int take = Math.Min(destination.Length, _count);
             for (int i = 0; i < take; i++)
             {
@@ -604,6 +625,7 @@ public sealed class UberSdrAudioInput : IUberSdrSession
         float[] audio = [];
         ulong firstPacketNs = 0;
         ulong guardNs = (ulong)_tuning.StartupGuardMs * 1_000_000UL;
+        bool heard = false;
 
         try
         {
@@ -673,7 +695,17 @@ public sealed class UberSdrAudioInput : IUberSdrSession
                 }
 
                 int produced = converter.Process(iq.AsSpan(0, shorts - (shorts % 2)), audio);
-                Publish(audio.AsSpan(0, produced));
+
+                // The first audio of any session but the first follows the time between them,
+                // which nobody heard.
+                bool afterHole = false;
+                if (!heard && produced > 0)
+                {
+                    heard = true;
+                    afterHole = _sessionsHeard++ > 0;
+                }
+
+                Publish(audio.AsSpan(0, produced), afterHole);
             }
         }
         finally
@@ -684,14 +716,23 @@ public sealed class UberSdrAudioInput : IUberSdrSession
 
     /// <summary>Copies converted audio into the ring, applying gain and complaining if a lagging
     /// consumer is costing samples.</summary>
-    private void Publish(ReadOnlySpan<float> samples)
+    /// <param name="samples">The audio.</param>
+    /// <param name="afterHole">The audio is the first of a session after the first, so it
+    /// follows a stretch nobody heard (<see cref="Discontinuities"/>).</param>
+    internal void Publish(ReadOnlySpan<float> samples, bool afterHole = false)
     {
         // The pump reads this across threads to tell a real session from an instant death.
         Interlocked.Add(ref _published, samples.Length);
         float gain = _tuning.Gain;
         long dropped = 0;
+        long total = 0;
         lock (_gate)
         {
+            if (afterHole)
+            {
+                Interlocked.Increment(ref _resumed);
+            }
+
             foreach (float sample in samples)
             {
                 if (_count == _ring.Length)
@@ -716,6 +757,13 @@ public sealed class UberSdrAudioInput : IUberSdrSession
                 _count++;
             }
 
+            // Counted before the lock goes, so a reader never takes the audio after the hole
+            // without the count that says it is there.
+            if (dropped > 0)
+            {
+                total = Interlocked.Add(ref _dropped, dropped);
+            }
+
             Monitor.PulseAll(_gate);
         }
 
@@ -724,7 +772,6 @@ public sealed class UberSdrAudioInput : IUberSdrSession
             return;
         }
 
-        long total = Interlocked.Add(ref _dropped, dropped);
         // Once a box is behind it stays behind for a while; one line per second of loss is
         // enough to say so without burying the journal.
         if (total - Interlocked.Read(ref _droppedReported) >= _tuning.OutputRate)

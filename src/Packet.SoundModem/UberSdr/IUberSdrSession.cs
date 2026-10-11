@@ -17,6 +17,10 @@ internal interface IUberSdrSession : IAudioInput, IDisposable
     /// between sessions when quiet is deliberate. See <see cref="UberSdrAudioInput.SessionLive"/>.</summary>
     bool SessionLive { get; }
 
+    /// <summary>A running count that moves whenever the session's audio has a hole in it. See
+    /// <see cref="UberSdrAudioInput.Discontinuities"/>.</summary>
+    long Discontinuities { get; }
+
     /// <summary>Raised once when the receiver has been unreachable for long enough that the
     /// session's own reconnecting has stopped being hopeful.</summary>
     event Action<string>? Lost;

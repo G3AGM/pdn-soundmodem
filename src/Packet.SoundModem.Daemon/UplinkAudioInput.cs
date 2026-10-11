@@ -47,6 +47,8 @@ internal sealed class UplinkAudioInput : IAudioInput, IDisposable
     private long _accepted;
     private long _consumed;
     private long _dropped;
+    private long _breaks;
+    private long _lossAtRead;
     private bool _disposed;
 
     /// <param name="sampleRate">The rate the station said it is relaying at, in its hello.</param>
@@ -105,6 +107,33 @@ internal sealed class UplinkAudioInput : IAudioInput, IDisposable
 
     /// <summary>Samples thrown away because the buffer overran, for the journal.</summary>
     internal long Dropped => Interlocked.Read(ref _dropped);
+
+    /// <summary>
+    /// A running count that moves whenever the audio this input hands out has a hole in it: the
+    /// samples the jitter buffer had no room for, plus one for each <see cref="MarkBreak"/> (the
+    /// station reconnected, or started sending again after nobody was watching). As of the last
+    /// <see cref="Read"/> that delivered audio, so the count the receive loop reads after a Read
+    /// describes exactly the samples that Read handed out. A Read that returns nothing is not a
+    /// hole: the socket delivers late audio whole.
+    /// </summary>
+    internal long Discontinuities => Interlocked.Read(ref _lossAtRead);
+
+    /// <summary>
+    /// Says the audio after this point does not follow on from the audio before it: the station
+    /// reconnected, or is sending again after a spell with nobody watching. Called before any of
+    /// the new audio arrives. Nothing is marked for an input that has never had audio, because
+    /// there is nothing before it to be discontinuous with.
+    /// </summary>
+    internal void MarkBreak()
+    {
+        lock (_gate)
+        {
+            if (_accepted > 0)
+            {
+                _breaks++;
+            }
+        }
+    }
 
     /// <summary>Samples waiting to be read.</summary>
     internal long Buffered => Accepted - Consumed;
@@ -246,6 +275,7 @@ internal sealed class UplinkAudioInput : IAudioInput, IDisposable
             }
 
             _consumed += written;
+            Interlocked.Exchange(ref _lossAtRead, _dropped + _breaks);
             if (_blocks.Count == 0)
             {
                 _arrived.Reset();

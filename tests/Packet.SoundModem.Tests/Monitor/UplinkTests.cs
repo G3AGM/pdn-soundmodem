@@ -314,6 +314,105 @@ public class UplinkTests
     }
 
     [Fact(Timeout = TestTimeoutMs)]
+    public async Task A_Reconnect_Marks_Exactly_The_First_Block_After_It_In_The_Channel_Audio_Stream()
+    {
+        await using var h = await Harness.StartAsync();
+        // Disposed by hand, half way through: that is the disconnect.
+        var first = await StubStation.OpenAsync(h.Port, h.Token, Callsign);
+        await first.WelcomedAsync();
+        await using Browser browser = await h.WatchAsync(Slug);
+        await StubStation.UntilAsync(() => first.Demands.Contains(1), "a demand for one viewer");
+
+        // A local program reading the relayed station's channel audio, as a decoder would.
+        var blocks = new List<(byte Flags, int Samples)>();
+        var greeted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var reader = new ClientWebSocket();
+        using var stop = new CancellationTokenSource();
+        await reader.ConnectAsync(new Uri($"ws://127.0.0.1:{h.Port}/r/{Slug}/channel-audio"), CancellationToken.None);
+        Task reading = Task.Run(async () =>
+        {
+            byte[] buffer = new byte[1 << 16];
+            try
+            {
+                while (true)
+                {
+                    WebSocketReceiveResult result = await reader.ReceiveAsync(buffer, stop.Token);
+                    if (result.MessageType == WebSocketMessageType.Close)
+                    {
+                        return;
+                    }
+
+                    if (result.MessageType == WebSocketMessageType.Text)
+                    {
+                        greeted.TrySetResult(); // the hello: this reader is registered
+                    }
+                    else if (result.Count > 1 && buffer[0] == 0x01)
+                    {
+                        lock (blocks)
+                        {
+                            blocks.Add((buffer[1], BitConverter.ToInt32(buffer, 12)));
+                        }
+                    }
+                }
+            }
+            catch (Exception e) when (e is OperationCanceledException or WebSocketException)
+            {
+            }
+        });
+        int Blocks()
+        {
+            lock (blocks)
+            {
+                return blocks.Count;
+            }
+        }
+
+        int Heard()
+        {
+            lock (blocks)
+            {
+                return blocks.Sum(b => b.Samples);
+            }
+        }
+
+        await greeted.Task.WaitAsync(TimeSpan.FromSeconds(15));
+        // Half a second, as SendSecondsAsync counts it.
+        int sentBlocks = (int)Math.Round(0.5 * first.AudioRate / first.BlockSamples);
+        for (int i = 0; i < sentBlocks; i++)
+        {
+            await first.SendAudioAsync(transmitted: false);
+        }
+
+        int beforeTheGap = sentBlocks * first.BlockSamples;
+        await StubStation.UntilAsync(() => Blocks() >= 3, "the first connection's audio in the stream");
+
+        await first.DisposeAsync();
+        await h.UntilAsync(async () => !(await h.RowAsync(Slug)).GetProperty("offered").GetBoolean());
+        await using var again = await StubStation.OpenAsync(h.Port, h.Token, Callsign);
+        await again.WelcomedAsync();
+        await StubStation.UntilAsync(() => again.Demands.Contains(1), "the viewer's demand, again");
+        await again.SendSecondsAsync(0.5);
+        await StubStation.UntilAsync(
+            () => Heard() >= beforeTheGap + (beforeTheGap / 2), // the last partial block waits for more
+            "the second connection's audio in the stream");
+
+        await stop.CancelAsync();
+        await reading;
+        List<int> gaps;
+        int heardBeforeTheMark;
+        lock (blocks)
+        {
+            gaps = [.. Enumerable.Range(0, blocks.Count).Where(i => (blocks[i].Flags & 0x02) != 0)];
+            heardBeforeTheMark = gaps.Count == 0 ? -1 : blocks.Take(gaps[0]).Sum(b => b.Samples);
+        }
+
+        gaps.Should().ContainSingle("the reconnect is one hole and nothing else is");
+        heardBeforeTheMark.Should().Be(beforeTheGap,
+            "the mark goes on the first block after the hole: all of the first connection's audio "
+            + "before it, none of the second's");
+    }
+
+    [Fact(Timeout = TestTimeoutMs)]
     public async Task A_Reconnecting_Station_Is_Listed_As_It_Now_Describes_Itself()
     {
         await using var h = await Harness.StartAsync();

@@ -223,6 +223,10 @@ internal sealed class OpenWebRxStationDevice(
             Input = input,
             SessionLive = () => input.SessionLive,
             Tuner = input,
+
+            // What the channel audio stream marks as a gap: a session picked up again, or audio
+            // dropped because the station fell behind. An empty Read is not one.
+            InputLossCount = () => input.Discontinuities,
         };
     }
 }

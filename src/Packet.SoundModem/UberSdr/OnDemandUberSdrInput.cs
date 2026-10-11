@@ -86,6 +86,11 @@ public sealed class OnDemandUberSdrInput : IAudioInput, IDisposable
     private int _generation;
     private bool _disposed;
 
+    // Holes in the audio this input has handed out, for Discontinuities: the counts of the
+    // sessions already closed, plus one for every session opened after the first. Under _gate.
+    private long _lostBefore;
+    private int _sessionsOpened;
+
     internal OnDemandUberSdrInput(
         UberSdrEndpoint endpoint,
         ConnectionResponse connection,
@@ -191,6 +196,24 @@ public sealed class OnDemandUberSdrInput : IAudioInput, IDisposable
     /// connecting, retrying and a session's own between-attempt quiet are all false, and all
     /// deliberate; the daemon's starvation watch stands down on this.</summary>
     public bool SessionLive => Volatile.Read(ref _session)?.SessionLive ?? false;
+
+    /// <summary>
+    /// A running count that moves whenever the audio this input hands out has a hole in it: the
+    /// open session's own (<see cref="UberSdrAudioInput.Discontinuities"/>), those of every
+    /// session before it, and one for each session opened after the first, because the time
+    /// between one session closing and the next opening was not heard. Read once per block by
+    /// the daemon; a <see cref="Read"/> that returns nothing is not a hole on its own.
+    /// </summary>
+    public long Discontinuities
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _lostBefore + (_session?.Discontinuities ?? 0);
+            }
+        }
+    }
 
     /// <summary>
     /// Validates the configuration against the instance and returns an idle input. The
@@ -370,6 +393,11 @@ public sealed class OnDemandUberSdrInput : IAudioInput, IDisposable
 
             _policy.Reset();
             _refused = false;
+            if (_sessionsOpened++ > 0)
+            {
+                _lostBefore++;
+            }
+
             session.Lost += reason => OnLost(generation, reason);
             Volatile.Write(ref _session, session);
             Monitor.PulseAll(_gate);
@@ -414,6 +442,7 @@ public sealed class OnDemandUberSdrInput : IAudioInput, IDisposable
             }
 
             session = _session;
+            _lostBefore += session?.Discontinuities ?? 0;
             Volatile.Write(ref _session, null);
             CancelTimer();
             string gaveUp =
@@ -456,6 +485,7 @@ public sealed class OnDemandUberSdrInput : IAudioInput, IDisposable
             }
 
             session = _session;
+            _lostBefore += session?.Discontinuities ?? 0;
             Volatile.Write(ref _session, null);
             _timer = null;
             announce = SetPhase(OnDemandPhase.Idle);

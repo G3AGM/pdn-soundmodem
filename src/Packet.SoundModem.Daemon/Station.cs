@@ -47,10 +47,10 @@ internal sealed class Station : IDisposable
     private readonly XrunWatch _xrunWatch = new();
 
     // Audio the input lost, for the channel to pass on (SoundModemChannel.NoteReceiveAudioLost):
-    // the input's own loss counter as last read, and whether the input stalled (a Read that
-    // returned nothing) since the last block it delivered. Receive-loop thread only.
+    // the input's own loss counter as last read. Receive-loop thread only. A Read that returns
+    // nothing is not loss: every input that can do that buffers its source, so the audio arrives
+    // late and complete, and only the input's own counter knows when some really went missing.
     private long _inputLossSeen;
-    private bool _inputStalled;
     private readonly string _silenceMessage;
     private readonly string _starvationMessage;
 
@@ -213,9 +213,10 @@ internal sealed class Station : IDisposable
                 // Never a busy spin: every input that can return 0 has already waited inside Read
                 // (100 ms ubersdr, 200 ms flex; ALSA and wav-loop never return 0) - see the
                 // dead-feed notes on StationOptions.DeviceKind.
-                // Whatever the input should have delivered meanwhile is gone, so the next block it
-                // does deliver follows a hole.
-                _inputStalled = true;
+                // Not a hole: those inputs buffer their source, so what did not arrive yet comes
+                // in the next Read, complete. Real loss moves the input's own counter
+                // (StationOptions.InputLossCount); a feed that stops altogether is the starvation
+                // watch's to call.
                 continue;
             }
 
@@ -283,8 +284,7 @@ internal sealed class Station : IDisposable
 
             // Lost audio is said before the block that follows it, so whoever hands the audio on
             // marks exactly that block. Read every block: a counter read, nothing more.
-            bool inputLost = _inputStalled;
-            _inputStalled = false;
+            bool inputLost = false;
             if (_options.InputLossCount is Func<long> inputLossCount)
             {
                 long lossCount = inputLossCount();
@@ -575,8 +575,8 @@ internal sealed record StationOptions
     /// A running count of the times the input lost audio (a sound card's capture overruns, a
     /// radio's lost DAX packets), read once per block; whenever it moves, the channel is told
     /// audio was lost before that block (<c>SoundModemChannel.NoteReceiveAudioLost</c>). Null for
-    /// a device that cannot say. An input that stalls (a <c>Read</c> that returns nothing) is
-    /// treated the same way without it.
+    /// a device that cannot say. A <c>Read</c> that returns nothing is never loss on its own: an
+    /// input that can do that buffers its source and delivers the same audio a little later.
     /// </summary>
     public Func<long>? InputLossCount { get; init; }
 

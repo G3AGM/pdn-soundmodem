@@ -693,6 +693,8 @@ public class MonitorHostTests
 
         public bool SessionLive { get; init; }
 
+        public long Discontinuities => 0;
+
         public int SampleRate => 12000;
 
         public bool Disposed { get; private set; }

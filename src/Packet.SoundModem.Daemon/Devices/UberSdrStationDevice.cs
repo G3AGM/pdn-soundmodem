@@ -154,6 +154,7 @@ internal sealed class UberSdrStationDevice(
         string? uberSdrReceiver;
         IAudioInput input;
         Func<bool> uberSdrSessionLive;
+        Func<long> uberSdrLoss;
 
         if (uberSdrConfig?.OnDemand == true)
         {
@@ -180,6 +181,7 @@ internal sealed class UberSdrStationDevice(
 
             input = onDemand;
             uberSdrSessionLive = () => onDemand.SessionLive;
+            uberSdrLoss = () => onDemand.Discontinuities;
             uberSdrConnection = onDemand.Connection;
             uberSdrReceiver = onDemand.ReceiverDescription;
             stationJournal.Write($"{audioBanner}, on demand: connected while the waterfall has a viewer, "
@@ -210,6 +212,7 @@ internal sealed class UberSdrStationDevice(
 
             input = uberSdr;
             uberSdrSessionLive = () => uberSdr.SessionLive;
+            uberSdrLoss = () => uberSdr.Discontinuities;
             uberSdrConnection = uberSdr.Connection;
             uberSdrReceiver = uberSdr.ReceiverDescription;
             stationJournal.Write($"{audioBanner})");
@@ -253,6 +256,11 @@ internal sealed class UberSdrStationDevice(
             Playback = new NullAudioOutput(dspRate),
             Input = input,
             SessionLive = uberSdrSessionLive,
+
+            // What the channel audio stream marks as a gap: a session picked up again, or audio
+            // dropped because the station fell behind. A Read that comes back empty is not one;
+            // the input buffers the stream and the audio arrives late and whole.
+            InputLossCount = uberSdrLoss,
         };
     }
 }
