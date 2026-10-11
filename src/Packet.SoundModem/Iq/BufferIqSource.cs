@@ -1,4 +1,4 @@
-using M0LTE.Flex;
+using M0LTE.Radio.Audio;
 
 namespace Packet.SoundModem.Iq;
 
@@ -36,6 +36,14 @@ public sealed class BufferIqSource : IIqSource
 
     /// <inheritdoc />
     public double CentreFrequencyHz { get; }
+
+    /// <inheritdoc />
+    /// <remarks>Always 0: a buffer has one tuning.</remarks>
+    public long TuningGeneration => 0;
+
+    /// <inheritdoc />
+    /// <remarks>Always 0: a buffer cannot lose samples.</remarks>
+    public long SamplesLost => 0;
 
     /// <inheritdoc />
     public int Read(Span<float> interleaved)

@@ -1,4 +1,3 @@
-using M0LTE.Flex;
 using M0LTE.Radio.Audio;
 using M0LTE.Ofdm;
 
