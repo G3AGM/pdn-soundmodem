@@ -276,7 +276,7 @@ public sealed class RtlTcpIqSource : IIqSource, IDisposable
     public async Task OpenAsync(CancellationToken cancellation)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        Socket socket = await Task.Run(() => Connect(cancellation), cancellation).ConfigureAwait(false);
+        Socket socket = await ConnectAsync(cancellation).ConfigureAwait(false);
         try
         {
             Publish(socket);
@@ -753,7 +753,7 @@ public sealed class RtlTcpIqSource : IIqSource, IDisposable
             Socket socket;
             try
             {
-                socket = Connect(_closing.Token);
+                socket = ConnectAsync(_closing.Token).GetAwaiter().GetResult();
                 try
                 {
                     Publish(socket);
@@ -806,77 +806,94 @@ public sealed class RtlTcpIqSource : IIqSource, IDisposable
 
     /// <summary>Connects and reads the header; the settings are sent by <see cref="Publish"/>.</summary>
     /// <remarks>
-    /// Synchronous on purpose, timed out by closing the socket. .NET puts a socket that has once
-    /// been used asynchronously into non-blocking mode for good, and a blocking
-    /// <see cref="Socket.Receive(Span{byte})"/> on such a socket allocates every time it has to
-    /// wait, which for a reader that keeps up is every read. Kept blocking, the steady-state read
-    /// allocates nothing (<c>A_Steady_Stream_Is_Read_Without_Allocating</c>).
+    /// <para>The socket is only ever used in blocking mode, and nothing asynchronous touches it.
+    /// .NET leaves a socket that has once been non-blocking (an asynchronous call, or
+    /// <see cref="Socket.Blocking"/> set false) non-blocking underneath for good, and a blocking
+    /// <see cref="Socket.Receive(Span{byte})"/> on it then allocates every time it has to wait,
+    /// which for a reader that keeps up is every read
+    /// (<c>A_Steady_Stream_Is_Read_Without_Allocating</c>).</para>
+    /// <para>So the lookup, the connect and the header are done blocking on a thread of their own,
+    /// and waited for here with the timeout and the caller's cancellation. A host that never
+    /// answers, or a dispose, ends the wait at once: the socket is closed and the attempt left to
+    /// finish on its own thread, which it does by the system's own connect timeout at the latest,
+    /// its result thrown away.</para>
     /// </remarks>
-    private Socket Connect(CancellationToken cancellation)
+    private async Task<Socket> ConnectAsync(CancellationToken cancellation)
     {
         cancellation.ThrowIfCancellationRequested();
-        var socket = new Socket(SocketType.Stream, ProtocolType.Tcp) { NoDelay = true };
-        int timedOut = 0;
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellation);
         timeout.CancelAfter(_options.ConnectTimeout);
-        using CancellationTokenRegistration closer = timeout.Token.Register(() =>
-        {
-            Volatile.Write(ref timedOut, 1);
-            socket.Dispose();
-        });
+        var socket = new Socket(SocketType.Stream, ProtocolType.Tcp) { NoDelay = true };
+        var progress = new ConnectProgress();
+        Task<RtlTcpHeader?> attempt = Task.Factory.StartNew(
+            () => ConnectBlocking(socket, progress), CancellationToken.None,
+            TaskCreationOptions.LongRunning, TaskScheduler.Default);
+        RtlTcpHeader? parsed;
         try
         {
-            string stage = $"no answer from {_endpoint} in {_options.ConnectTimeout.TotalSeconds:F0} s";
-            try
-            {
-                socket.Connect(_endpoint.Host, _endpoint.Port);
-                stage = $"{_endpoint} accepted the connection and then sent nothing in "
-                    + $"{_options.ConnectTimeout.TotalSeconds:F0} s";
-                byte[] header = new byte[RtlTcpProtocol.HeaderLength];
-                int have = 0;
-                while (have < header.Length)
-                {
-                    int n = socket.Receive(header.AsSpan(have));
-                    if (n == 0)
-                    {
-                        throw new IOException($"{_endpoint} closed the connection before sending anything; "
-                            + "rtl_tcp serves one client at a time, so another may have it");
-                    }
-
-                    have += n;
-                }
-
-                RtlTcpHeader? parsed = RtlTcpProtocol.ParseHeader(header);
-                if (parsed != Header || !_headerSaid)
-                {
-                    _headerSaid = true;
-                    Say(parsed is RtlTcpHeader h
-                        ? $"rtltcp: {_endpoint} has a dongle with an {h.TunerName} tuner ({h.GainCount} gain steps)"
-                        : $"rtltcp: {_endpoint} sent no dongle header; taking its stream as IQ from the start");
-                }
-
-                Header = parsed;
-            }
-            catch (Exception e) when (Volatile.Read(ref timedOut) == 1 && e is SocketException or ObjectDisposedException)
-            {
-                cancellation.ThrowIfCancellationRequested();
-                throw new IOException(stage);
-            }
-
-            closer.Unregister();
-            if (Volatile.Read(ref timedOut) == 1)
-            {
-                cancellation.ThrowIfCancellationRequested();
-                throw new IOException(stage);
-            }
-
-            socket.ReceiveTimeout = (int)Math.Clamp(_options.NoDataTimeout.TotalMilliseconds, 1, int.MaxValue);
-            return socket;
+            parsed = await attempt.WaitAsync(timeout.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (!attempt.IsCompleted)
+        {
+            socket.Dispose();
+            _ = attempt.ContinueWith(static t => _ = t.Exception, CancellationToken.None,
+                TaskContinuationOptions.OnlyOnFaulted, TaskScheduler.Default);
+            cancellation.ThrowIfCancellationRequested();
+            throw new IOException(progress.Connected
+                ? $"{_endpoint} accepted the connection and then sent nothing in {_options.ConnectTimeout.TotalSeconds:F0} s"
+                : $"no answer from {_endpoint} in {_options.ConnectTimeout.TotalSeconds:F0} s");
         }
         catch
         {
             socket.Dispose();
             throw;
+        }
+
+        if (parsed != Header || !_headerSaid)
+        {
+            _headerSaid = true;
+            Say(parsed is RtlTcpHeader h
+                ? $"rtltcp: {_endpoint} has a dongle with an {h.TunerName} tuner ({h.GainCount} gain steps)"
+                : $"rtltcp: {_endpoint} sent no dongle header; taking its stream as IQ from the start");
+        }
+
+        Header = parsed;
+        socket.ReceiveTimeout = (int)Math.Clamp(_options.NoDataTimeout.TotalMilliseconds, 1, int.MaxValue);
+        return socket;
+    }
+
+    /// <summary>The blocking half of <see cref="ConnectAsync"/>, on its own thread.</summary>
+    private RtlTcpHeader? ConnectBlocking(Socket socket, ConnectProgress progress)
+    {
+        socket.ReceiveTimeout = (int)Math.Clamp(_options.ConnectTimeout.TotalMilliseconds, 1, int.MaxValue);
+        socket.Connect(_endpoint.Host, _endpoint.Port);
+        progress.Connected = true;
+        byte[] header = new byte[RtlTcpProtocol.HeaderLength];
+        int have = 0;
+        while (have < header.Length)
+        {
+            int n = socket.Receive(header.AsSpan(have));
+            if (n == 0)
+            {
+                throw new IOException($"{_endpoint} closed the connection before sending anything; "
+                    + "rtl_tcp serves one client at a time, so another may have it");
+            }
+
+            have += n;
+        }
+
+        return RtlTcpProtocol.ParseHeader(header);
+    }
+
+    /// <summary>How far a connect attempt got, for saying why it timed out.</summary>
+    private sealed class ConnectProgress
+    {
+        private volatile bool _connected;
+
+        public bool Connected
+        {
+            get => _connected;
+            set => _connected = value;
         }
     }
 

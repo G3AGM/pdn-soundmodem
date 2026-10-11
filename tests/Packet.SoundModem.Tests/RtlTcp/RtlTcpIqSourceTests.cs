@@ -222,6 +222,43 @@ public sealed class RtlTcpIqSourceTests
         source.Read(new float[64]).Should().Be(0, "a source that has given up stays closed");
     }
 
+    // 192.0.2.1 is TEST-NET-1 (RFC 5737): routed nowhere, so a connect to it either hangs for
+    // the OS's own timeout or fails at once, depending on the network. Either way these must
+    // come back promptly.
+    private static readonly RtlTcpEndpoint Blackhole = new("192.0.2.1", 1234);
+
+    [Fact]
+    public async Task Disposing_While_Connecting_To_A_Host_That_Never_Answers_Returns_Promptly()
+    {
+        var source = new RtlTcpIqSource(Blackhole, ReadOnly() with
+        {
+            ConnectTimeout = TimeSpan.FromMinutes(5),
+            ReconnectDelay = TimeSpan.FromMilliseconds(10),
+            GiveUpAfter = TimeSpan.MaxValue,
+        });
+        Task<int> reading = Task.Run(() => source.Read(new float[64]));
+        await Task.Delay(300);
+
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        source.Dispose();
+        int got = await reading.WaitAsync(TimeSpan.FromSeconds(10));
+
+        got.Should().Be(0);
+        clock.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(5));
+    }
+
+    [Fact]
+    public async Task An_Open_To_A_Host_That_Never_Answers_Is_Cancelled_Promptly()
+    {
+        using var source = new RtlTcpIqSource(Blackhole, ReadOnly() with { ConnectTimeout = TimeSpan.FromMinutes(5) });
+        using var cancel = new CancellationTokenSource(TimeSpan.FromMilliseconds(300));
+
+        Func<Task> open = () => source.OpenAsync(cancel.Token);
+
+        // Cancelled, or refused by a network that says so at once: never the five minutes.
+        await open.Should().ThrowAsync<Exception>().WaitAsync(TimeSpan.FromSeconds(10));
+    }
+
     [Fact]
     public async Task An_Unreachable_Server_Fails_The_Open_So_Start_Up_Can_Say_So()
     {
@@ -391,7 +428,11 @@ public sealed class RtlTcpIqSourceTests
             {
                 while (!streaming.IsCancellationRequested)
                 {
+                    // A pause now and then, so the reader often has to wait, warm-up included:
+                    // a read that waits is the one that would allocate on a socket left
+                    // non-blocking.
                     server.Send(block);
+                    Thread.Sleep(1);
                 }
             }
             catch (Exception e) when (e is IOException or InvalidOperationException or ObjectDisposedException)
@@ -403,15 +444,17 @@ public sealed class RtlTcpIqSourceTests
         // windows on a stream at its rate and has nothing to say either: the steady state.
         var buffer = new float[16384];
         long allocated = 0;
+        int allocatingReads = 0;
         for (int read = 0; read < 600; read++)
         {
             long before = GC.GetAllocatedBytesForCurrentThread();
             int got = source.Read(buffer);
             long after = GC.GetAllocatedBytesForCurrentThread();
             got.Should().BeGreaterThan(0);
-            if (read >= 100)
+            if (read >= 100 && after != before)
             {
                 allocated += after - before;
+                allocatingReads++;
             }
 
             clock.Advance(TimeSpan.FromTicks(TimeSpan.TicksPerSecond * (got / 2) / rate));
@@ -422,7 +465,14 @@ public sealed class RtlTcpIqSourceTests
         server.DropClient();
         await feeder.WaitAsync(TimeSpan.FromSeconds(10));
 
-        allocated.Should().Be(0, "a read of a steady stream, rate watch and all, allocates nothing");
+        // Zero, give or take one read: the runtime retires the unused rest of a thread's
+        // allocation context (under 8 KiB) when it suspends the thread, which the counter shows
+        // as one jump that nothing here allocated. A real allocation in the read path shows on
+        // every read, or on every read that waits, which with the feeder's pauses is over a
+        // hundred of these five hundred (measured: a socket left non-blocking by an async
+        // connect allocates on about 120 of them).
+        allocatingReads.Should().BeLessThanOrEqualTo(1, "a read of a steady stream, rate watch and all, allocates nothing");
+        allocated.Should().BeLessThan(8192);
         source.ProfileDrops.Should().Be(0);
         source.SuspectedProfileChanges.Should().Be(0);
     }
