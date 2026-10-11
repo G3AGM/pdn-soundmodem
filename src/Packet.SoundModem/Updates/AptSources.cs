@@ -9,7 +9,10 @@ internal static class AptSources
     /// <summary>The repository's host, which any entry for it names.</summary>
     public const string RepoHost = "packet-net.github.io";
 
-    /// <summary>Where apt keeps its sources.</summary>
+    /// <summary>The classic single-file sources list, which apt still reads alongside <see cref="SourcesDirectory"/>.</summary>
+    public const string SourcesFile = "/etc/apt/sources.list";
+
+    /// <summary>Where apt keeps its per-repository sources.</summary>
     public const string SourcesDirectory = "/etc/apt/sources.list.d";
 
     /// <summary>
@@ -38,34 +41,45 @@ internal static class AptSources
         return false;
     }
 
-    /// <summary>The check against this machine's own apt sources: every file in <see cref="SourcesDirectory"/>. Never throws.</summary>
-    public static bool ThisMachine()
+    /// <summary>
+    /// The check against this machine's own apt sources: <see cref="SourcesFile"/> itself and
+    /// every file in <see cref="SourcesDirectory"/> - a station that added the packet-net line
+    /// to the classic single file, rather than its own file under the <c>.d</c> directory, is
+    /// found the same way. Never throws.
+    /// </summary>
+    public static bool ThisMachine() => ThisMachine(SourcesFile, SourcesDirectory);
+
+    /// <summary>The same check against the given paths, for tests. Never throws.</summary>
+    internal static bool ThisMachine(string sourcesFile, string sourcesDirectory)
     {
         try
         {
-            if (!Directory.Exists(SourcesDirectory))
+            var texts = new List<string> { ReadIfExists(sourcesFile) };
+            if (Directory.Exists(sourcesDirectory))
             {
-                return false;
+                texts.AddRange(Directory.EnumerateFiles(sourcesDirectory)
+                    .Where(f => f.EndsWith(".list", StringComparison.Ordinal) || f.EndsWith(".sources", StringComparison.Ordinal))
+                    .Select(ReadIfExists));
             }
 
-            var texts = Directory.EnumerateFiles(SourcesDirectory)
-                .Where(f => f.EndsWith(".list", StringComparison.Ordinal) || f.EndsWith(".sources", StringComparison.Ordinal))
-                .Select(f =>
-                {
-                    try
-                    {
-                        return File.ReadAllText(f);
-                    }
-                    catch (Exception e) when (e is IOException or UnauthorizedAccessException)
-                    {
-                        return "";
-                    }
-                });
             return NamesRepo(texts);
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {
             return false;
+        }
+    }
+
+    /// <summary><paramref name="path"/>'s text, or empty for one that does not exist or cannot be read.</summary>
+    private static string ReadIfExists(string path)
+    {
+        try
+        {
+            return File.Exists(path) ? File.ReadAllText(path) : "";
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            return "";
         }
     }
 }
