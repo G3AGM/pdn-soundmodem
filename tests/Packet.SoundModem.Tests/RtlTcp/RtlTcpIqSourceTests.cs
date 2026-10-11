@@ -445,13 +445,19 @@ public sealed class RtlTcpIqSourceTests
         var buffer = new float[16384];
         long allocated = 0;
         int allocatingReads = 0;
+        int pausedReads = 0;
         for (int read = 0; read < 600; read++)
         {
+            TimeSpan paused = GC.GetTotalPauseDuration();
             long before = GC.GetAllocatedBytesForCurrentThread();
             int got = source.Read(buffer);
             long after = GC.GetAllocatedBytesForCurrentThread();
             got.Should().BeGreaterThan(0);
-            if (read >= 100 && after != before)
+            if (read >= 100 && GC.GetTotalPauseDuration() != paused)
+            {
+                pausedReads++;
+            }
+            else if (read >= 100 && after != before)
             {
                 allocated += after - before;
                 allocatingReads++;
@@ -465,12 +471,17 @@ public sealed class RtlTcpIqSourceTests
         server.DropClient();
         await feeder.WaitAsync(TimeSpan.FromSeconds(10));
 
-        // Zero, give or take one read: the runtime retires the unused rest of a thread's
-        // allocation context (under 8 KiB) when it suspends the thread, which the counter shows
-        // as one jump that nothing here allocated. A real allocation in the read path shows on
-        // every read, or on every read that waits, which with the feeder's pauses is over a
-        // hundred of these five hundred (measured: a socket left non-blocking by an async
-        // connect allocates on about 120 of them).
+        // Zero, give or take one read, among the reads no collection paused. The runtime retires
+        // the unused rest of a thread's allocation context (under 8 KiB) when it suspends the
+        // thread, which the counter shows as a jump that nothing here allocated; a collection
+        // started by another test's allocations does it on whichever reads it lands in, and on
+        // a loaded box that was two reads, not one (#688). Those reads say nothing about the
+        // read path, so they are set aside, the way #668 set aside the rate bridge's paused
+        // stretches. A real allocation in the read path shows on every read, or on every read
+        // that waits, which with the feeder's pauses is over a hundred of these five hundred
+        // (measured: a socket left non-blocking by an async connect allocates on about 120 of
+        // them), so it fails this whatever the collector does.
+        pausedReads.Should().BeLessThan(250, "most reads need to run unpaused for this to measure anything");
         allocatingReads.Should().BeLessThanOrEqualTo(1, "a read of a steady stream, rate watch and all, allocates nothing");
         allocated.Should().BeLessThan(8192);
         source.ProfileDrops.Should().Be(0);
