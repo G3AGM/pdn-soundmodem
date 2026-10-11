@@ -388,6 +388,14 @@ A frame counts only when the frame's own check sequence verified (a CRC that pas
 | `pdn_station_frequency_offset_hz_last` | gauge | `station`, `mode` | offset of the most recent frame, positive above centre |
 | `pdn_frames_uncounted_total` | counter | none | decodes attributed to no station |
 | `pdn_stations` | gauge | none | stations currently held |
+| `pdn_receive_samples_total` | counter | none | samples the audio input delivered to the receive loop |
+| `pdn_receive_seconds_total` | counter | none | wall time measured, leaving out spans while keyed or deliberately idle; `rate(samples) / rate(seconds)` over the sample rate is the share of real time reaching the modems |
+| `pdn_receive_busy_seconds_total` | counter | none | of that time, how long the loop spent processing rather than waiting for audio |
+| `pdn_receive_realtime_ratio` | gauge | none | share of real time reaching the modems over the last minute; absent until the first minute has been measured |
+| `pdn_receive_behind` | gauge | none | 1 while the station is reported behind real time, else 0 |
+| `pdn_receive_input_losses_total` | counter | none | times the input counted audio as lost: a sound card's capture overruns, a Flex's missing DAX packets, a break in an IQ or web receiver's stream; absent for a device that cannot say |
+
+The `pdn_receive_*` series are the station's own receive path rather than anything it heard. A loop that falls below 95% of real time over a minute also says so in the journal (`receive: BEHIND real time`), with whether the loop itself is the bottleneck or the audio went missing on the way in, and says `receive: caught up` when it is back above 99%. Bench inputs (`wav-loop`, `flex:mock`) are not measured.
 
 A station leaves `/metrics` after `stationIdleHours` (default 6) without a frame. When `maxStations` (default 256) is reached, the least recently heard station is dropped to make room. Frames leave `/metrics/frames` after `frameWindowSeconds` (default 300); a window is served, so reading it consumes nothing.
 

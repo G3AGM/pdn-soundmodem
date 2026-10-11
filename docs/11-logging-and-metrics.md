@@ -188,6 +188,14 @@ A frame counts towards a station only when its own check sequence verified, the 
 
 SSIDs fold into the callsign, since `GB7IOW-1` and `GB7IOW-9` are one transmitter. Modes stay apart. Every series is in the [metrics reference](reference/ports-and-endpoints.md#metrics).
 
+`/metrics` also says whether the station is keeping up. `pdn_receive_realtime_ratio` is the share of real time that reached the modems over the last minute, and `pdn_receive_behind` is 1 while it is under 95%. A station that cannot keep up loses audio before any modem hears it, which looks from outside exactly like a quiet band, so it says so in the journal too:
+
+```
+receive: BEHIND real time - 40% of the audio reached the modems over the last 60 s; the other 60% is lost or queued behind (frames missed or late, the waterfall slow, Listen chopped). The receive loop was busy 91% of that time, about 2.3 s of work per second of audio: it is the bottleneck. ...
+```
+
+When the loop is the bottleneck, the modems on the channel want more CPU than the station is getting. When it was mostly waiting, the audio went missing on the way in: the network, the radio or the device.
+
 Scrape `/metrics` with Prometheus, or anything that reads Prometheus text. Under `scrape_configs` in `prometheus.yml`:
 
 ```yaml

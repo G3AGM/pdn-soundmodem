@@ -3019,6 +3019,12 @@ using var station = new Station(
     },
     cancellation.Token);
 
+// Keeping up with real time, on the metrics endpoint beside the stations heard (issue #649).
+if (metrics is not null)
+{
+    metrics.ReceiveRate = station.ReceiveRate;
+}
+
 // This process runs one station, so a station fault IS the daemon's fault: journal the
 // sentence the station wrote, and take the proven restart contract every one of these
 // detectors has always taken - orderly shutdown, exit 1, systemd rebuilds the device session
