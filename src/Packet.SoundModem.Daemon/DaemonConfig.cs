@@ -1687,6 +1687,9 @@ public sealed class DaemonConfig
     /// <summary>Sound-card IQ settings (Device <c>iqcard:</c>); null = defaults. Ignored for every
     /// other device.</summary>
     public IqCardConfig? IqCard { get; set; }
+    /// <summary>Raw IQ params (Device <c>iqpipe:</c>); required there, ignored for every other
+    /// device.</summary>
+    public IqPipeConfig? IqPipe { get; set; }
 
     /// <summary>rtl_tcp settings (Device <c>rtltcp:</c>); null = defaults. Ignored for every
     /// other device.</summary>
@@ -2893,6 +2896,7 @@ public sealed class DaemonConfig
         Unknown("openwebrx", config.OpenWebRx?.UnknownSettings);
         Unknown("iqCard", config.IqCard?.UnknownSettings);
         Unknown("rtltcp", config.RtlTcp?.UnknownSettings);
+        Unknown("iqpipe", config.IqPipe?.UnknownSettings);
         Unknown("frameLog", config.FrameLog?.UnknownSettings);
         Unknown("survey", config.Survey?.UnknownSettings);
         Unknown("rawCapture", config.RawCapture?.UnknownSettings);

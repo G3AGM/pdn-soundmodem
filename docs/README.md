@@ -18,6 +18,7 @@ pdn-soundmodem is a software TNC for Linux. It turns a sound card, a FlexRadio o
 12. [12-troubleshooting.md](12-troubleshooting.md): read the journal, the start-up refusals, and what to do when nothing decodes.
 13. [13-decode-a-recording.md](13-decode-a-recording.md): get the frames out of a WAV file with the source-tree tools.
 14. [14-mailcast.md](14-mailcast.md): receive GB7RDG's 40 m bulletins into your own LinBPQ or FBB, on a pdn-soundmodem station with an HF rig; nothing is transmitted.
+15. [15-sdr-through-a-pipe.md](15-sdr-through-a-pipe.md): receive through your own RTL-SDR, SDRplay, Airspy or HackRF, with `rtl_sdr` or `rx_sdr` writing IQ into the modem.
 
 The two hardware pages are what to build to wire a CM108 interface to a radio: [hardware/tait-tm8100-cm108.md](hardware/tait-tm8100-cm108.md) for a Tait TM8100 on FM, and [hardware/yaesu-ft450d-cm108.md](hardware/yaesu-ft450d-cm108.md) for a Yaesu FT-450D's DATA jack on HF.
 
@@ -38,6 +39,7 @@ The two hardware pages are what to build to wire a CM108 interface to a radio: [
 - Put several modes in one HF passband: [08-hf.md](08-hf.md#place-your-modems-by-rf-frequency).
 - Put a modem on an FM channel: [08-hf.md](08-hf.md#on-an-fm-radio).
 - Listen without a radio: [09-web-receivers.md](09-web-receivers.md).
+- Listen through my own SDR: [15-sdr-through-a-pipe.md](15-sdr-through-a-pipe.md).
 - Publish my station: [10-public-monitor.md](10-public-monitor.md#add-the-publish-block).
 - Run a monitor site: [10-public-monitor.md](10-public-monitor.md#run-a-monitor-site).
 - Keep a log of every frame: [11-logging-and-metrics.md](11-logging-and-metrics.md#keep-a-frame-log).

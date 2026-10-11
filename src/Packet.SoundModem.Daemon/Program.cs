@@ -189,6 +189,7 @@ UberSdrConfig? uberSdrConfig = null;
 OpenWebRxConfig? openWebRxConfig = null;
 IqCardConfig? iqCardConfig = null;
 RtlTcpConfig? rtlTcpConfig = null;
+IqPipeConfig? iqPipeConfig = null;
 WaterfallConfig? waterfallConfig = null;
 PublishConfig? publishConfig = null;
 SurveyConfig? surveyConfig = null;
@@ -262,6 +263,7 @@ if (configPath is not null)
     openWebRxConfig = config.OpenWebRx;
     iqCardConfig = config.IqCard;
     rtlTcpConfig = config.RtlTcp;
+    iqPipeConfig = config.IqPipe;
     waterfallConfig = config.Waterfall;
     publishConfig = config.Publish;
     apiConfig = config.Api;
@@ -564,6 +566,7 @@ try
         new DeviceSettings(uberSdrConfig, HasWaterfall: waterfallConfig is not null, openWebRxConfig, iqCardConfig)
         {
             RtlTcp = rtlTcpConfig,
+            IqPipe = iqPipeConfig,
         });
 }
 catch (InvalidDataException malformed)
@@ -2936,6 +2939,8 @@ using var station = new Station(
         // What the channel audio stream marks as a gap (issue #584): a capture overrun on a sound
         // card, a DAX packet the radio never delivered on a Flex, a retune or a lost stretch of IQ
         // on a device behind the IQ front end (issue #594).
+        StarvationMessage = opened.StarvationMessage,
+
         InputLossCount = alsaIn is not null
             ? () => alsaIn.Xruns
             : flex?.Input is M0LTE.Flex.FlexAudioInput flexInput

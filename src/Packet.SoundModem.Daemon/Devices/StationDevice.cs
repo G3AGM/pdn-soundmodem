@@ -119,11 +119,15 @@ internal abstract class StationDevice
 /// <param name="HasWaterfall">Whether the station serves a waterfall page.</param>
 /// <param name="OpenWebRx">The <c>"openwebrx"</c> section, or null.</param>
 /// <param name="IqCard">The <c>"iqCard"</c> section, or null.</param>
+/// <param name="IqPipe">The <c>"iqpipe"</c> section, or null.</param>
 internal sealed record DeviceSettings(
     UberSdrConfig? UberSdr, bool HasWaterfall, OpenWebRxConfig? OpenWebRx = null, IqCardConfig? IqCard = null)
 {
     /// <summary>The <c>"rtltcp"</c> section, or null.</summary>
     public RtlTcpConfig? RtlTcp { get; init; }
+
+    /// <summary>The <c>"iqpipe"</c> section, or null.</summary>
+    public IqPipeConfig? IqPipe { get; init; }
 }
 
 /// <summary>
@@ -239,6 +243,10 @@ internal sealed class DeviceOpening
     /// nothing to count.
     /// </summary>
     public Func<long>? InputLossCount { get; init; }
+
+    /// <summary>The device's own words for a starved feed, given the threshold in seconds, or
+    /// null for its dead-feed family's (<see cref="StationOptions.StarvationMessage"/>).</summary>
+    public Func<double, string>? StarvationMessage { get; init; }
 
     /// <summary>The sound card's playback stream, on ALSA.</summary>
     public AlsaAudioOutput? AlsaOut { get; init; }
