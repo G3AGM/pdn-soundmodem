@@ -79,9 +79,12 @@ internal static class DeviceKinds
     /// <summary>An rtl_tcp server's IQ, demodulated here, receive only.</summary>
     public static readonly DeviceKind RtlTcp = new RtlTcpDeviceKind();
 
+    /// <summary>Raw IQ from a command, a FIFO or standard input, receive only.</summary>
+    public static readonly DeviceKind IqPipe = new IqPipeDeviceKind();
+
     /// <summary>Every kind, in the order a device string is tried against them; the sound card
     /// is last because it claims everything.</summary>
-    public static IReadOnlyList<DeviceKind> All { get; } = [Pipe, UberSdr, OpenWebRx, IqCard, RtlTcp, Flex, Alsa];
+    public static IReadOnlyList<DeviceKind> All { get; } = [Pipe, UberSdr, OpenWebRx, IqCard, RtlTcp, Flex, IqPipe, Alsa];
 
     /// <summary>The kind <paramref name="device"/> names.</summary>
     public static DeviceKind Of(string device)

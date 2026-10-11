@@ -40,7 +40,7 @@ internal static class Usage
                                   such as plughw:CARD=Device,DEV=0, pipe:IN,OUT[,RATE],
                                   flex:RADIO[:SLICE][@STATION], ubersdr:INSTANCE,
                                   openwebrx:URL, iqcard:DEVICE (IQ on a card's left and
-                                  right inputs) or rtltcp:HOST[:PORT].
+                                  right inputs), rtltcp:HOST[:PORT] or iqpipe:[FIFO|-].
           --capture-rate HZ       ALSA capture and playback rate (default 48000); it
                                   must be a multiple of the modems' DSP rate, 12000 or
                                   48000.

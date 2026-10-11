@@ -40,7 +40,7 @@ In the order `DaemonConfig` declares them. `sideband`, `dialFrequency` and each 
 
 | Key | Type | Default | What it is |
 |---|---|---|---|
-| `device` | string | `"default"` | The audio input and output: an ALSA name, `null`, `pipe:`, `flex:`, `ubersdr:`, `openwebrx:` or `rtltcp:`. |
+| `device` | string | `"default"` | The audio input and output: an ALSA name, `null`, `pipe:`, `flex:`, `ubersdr:`, `openwebrx:`, `iqcard:`, `rtltcp:` or `iqpipe:`. |
 | `captureDevice` | string | absent: `device` | The sound card to receive from, when it is not `device`. See [Two cards](#two-cards-capturedevice-and-playbackdevice). |
 | `playbackDevice` | string | absent: `device` | The sound card to transmit through, when it is not `device`. See [Two cards](#two-cards-capturedevice-and-playbackdevice). |
 | `captureRate` | int | `48000` | ALSA capture and playback rate in Hz; the modem decimates to its DSP rate. |
@@ -65,6 +65,7 @@ In the order `DaemonConfig` declares them. `sideband`, `dialFrequency` and each 
 | `ubersdr` | object | absent: defaults | Stream parameters for a public UberSDR web receiver. |
 | `openwebrx` | object | absent: defaults | Stream parameters for a public OpenWebRX or OpenWebRX+ receiver. |
 | `rtltcp` | object | absent: defaults | Settings for an RTL-SDR behind rtl_tcp, or OpenWebRX's rtl_tcp-compatible port. |
+| `iqpipe` | object | absent; required for `iqpipe:` | What the raw IQ of an `iqpipe:` device is, and the command that makes it. |
 | `waterfall` | object | absent: no page | The station page: spectrum, waterfall, frames, links, and the HTTP listener that `api` and `metrics` share. |
 | `monitor` | object | absent: not a monitor | Turns the process into a monitor site fronting many web receivers. Exclusive with `device`. |
 | `publish` | object | absent: publishes nothing | Dials out to a monitor site and offers this station on it. Exclusive with `monitor`. |
@@ -93,9 +94,10 @@ In the order `DaemonConfig` declares them. `sideband`, `dialFrequency` and each 
 | `openwebrx:<url>` | A public OpenWebRX or OpenWebRX+ receiver's demodulated audio, receive only. The URL you would open in a browser, path included; a bare host or `host:port` is taken as `http` on port 8073. |
 | `iqcard:<alsa device>` | IQ on a sound card's left and right inputs (a Xiegu G90, a SoftRock), receive only. See [`iqCard`](#iqcard). |
 | `rtltcp:<host>[:<port>]` | An rtl_tcp server's raw IQ, demodulated here, receive only: an RTL-SDR dongle behind `rtl_tcp`, or OpenWebRX's rtl_tcp-compatible port. The port defaults to 1234; an IPv6 address goes in brackets. |
+| `iqpipe:`, `iqpipe:<fifo>`, `iqpipe:-` | Raw IQ from an SDR, receive only: the standard output of `iqpipe.command` (`rx_sdr`, `rtl_sdr`), a FIFO another program writes, or standard input. See [`iqpipe`](#iqpipe). |
 
 - `captureRate` applies to ALSA and pipe devices only. It must be a multiple of the channel's DSP rate (12000, or 48000 when any 48 kHz mode is configured), or start-up refuses with `--capture-rate must be a multiple of N`. A pipe's own rate has the same rule: `pipe rate N is not a multiple of the channel's N Hz`.
-- A `flex:`, `ubersdr:`, `openwebrx:` or `rtltcp:` device provides its own clock; `captureRate` is ignored. So does `iqcard:`, whose rate is `iqCard`.`sampleRate`.
+- A `flex:`, `ubersdr:`, `openwebrx:`, `rtltcp:` or `iqpipe:` device provides its own clock; `captureRate` is ignored. So does `iqcard:`, whose rate is `iqCard`.`sampleRate`.
 - A device that will not open exits 1 with a message naming the key and the file, and the service retries.
 
 ### Two cards: `captureDevice` and `playbackDevice`
@@ -602,6 +604,30 @@ Read for an `rtltcp:` device. Ignored otherwise. The server sends raw IQ and thi
 - With `readOnly`, a stream that stops arriving at `sampleRate` (measured against the clock over five-second windows) is taken as a profile switch: its samples are dropped until the rate is right again, and the journal says so. A switch to another band at the same rate cannot be told for certain; a sudden lasting change in the stream's level or shape is said in the journal as a warning, and nothing else is done.
 - Refused, exit 2: `readOnly` without `centreFrequency` or `sampleRate`; `gainDb`, `ppm` or `rtlAgc` with `readOnly`; `centreFrequency` without it; a controlled `sampleRate` no dongle runs at; `gainDb` outside 0 to 60; `ppm` beyond 1000 either way; a `noDataSeconds`, `gain`, `fmIfBandwidthHz` or `fmDeviationHz` of 0 or less; `ssbLowHz` and `ssbHighHz` that do not rise from 0; any `ptt`, `rig`, `alsa.mixer` or `identify`, each named under its own section.
 - The station receives only. A server that cannot be reached at start-up exits 1 and the service retries.
+
+## `iqpipe`
+
+```json
+{ "device": "iqpipe:", "iqpipe": { "command": "rx_sdr -d driver=sdrplay -F CF32 -s {rate} -f {frequency} -", "format": "cf32", "rate": 250000 } }
+```
+
+Read for an `iqpipe:` device, and required there. Ignored otherwise. A pipe says nothing about itself, so this section says what the IQ is; the station's own IQ front end then filters and demodulates the band plan's channel out of it (USB, LSB, or FM for `"sideband": "fm"`). See [the SDR guide](../15-sdr-through-a-pipe.md) for the command lines.
+
+| Key | Type | Default | What it is |
+|---|---|---|---|
+| `command` | string | none | For `"device": "iqpipe:"`: the command whose standard output is the IQ, run with `/bin/sh -c`. `{frequency}` and `{rate}` are replaced with the centre and the rate in whole Hz. |
+| `format` | string | none; required | `cu8` (rtl_sdr), `cs8`, `cs16` or `cf32`, interleaved I and Q, little-endian. |
+| `rate` | int | none; required | The complex sample rate, samples per second. |
+| `centreFrequency` | number | the dial less an eighth of the rate (at most 25 kHz), with `{frequency}` in the command | The RF frequency, Hz, the IQ is centred on. Required when the command has no `{frequency}`, and for a FIFO or standard input. |
+| `swapIq` | bool | `false` | Swap I and Q, for a device whose spectrum comes out mirrored. |
+| `gain` | number | `1.0` | Linear gain on the demodulated audio. |
+
+- The channel is placed by the band plan, as for `ubersdr`: every modem needs an `rfFrequency`, or `dialFrequency` must be set. It has to lie inside the IQ, filter and all, or start-up exits 2 naming the centre, the rate and the dial.
+- A command that exits is restarted after 1 s, doubling to 16 s for each run in a row that lasted under 10 s; five of those in a row and the station exits 1 so the service starts it afresh. Its standard error goes to the journal: the first 20 lines of each run, then one line in ten seconds. A FIFO is reopened for the next writer. Standard input is read once; when it ends the station exits 1.
+- A pipe has no sample counter, so gaps are measured against the clock: the time between one run and the next, and a stall within a run that leaves the feed behind the clock, are marked in the audio as silence of that length. The `rate` is trusted, and the journal says when a feed delivers more than 2 % away from it over 30 s.
+- A channel within 1 kHz of the centre is warned about at start-up: most SDRs have a spike at DC.
+- Refused, exit 2: no `iqpipe` section; a `format` other than the four; a missing or non-positive `rate`; `"device": "iqpipe:"` with no `command`, or a FIFO or `-` with one; no `centreFrequency` and no `{frequency}` in the command; a `centreFrequency` or `gain` of 0 or less; any `ptt` or `rig`. A command that cannot be started exits 1.
+- The station receives only.
 
 ## `waterfall`
 

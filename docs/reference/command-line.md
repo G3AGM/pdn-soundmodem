@@ -45,8 +45,8 @@ These configure the station the process runs. Defaults apply when neither the fl
 | Flag | Argument | Default | What it does |
 |---|---|---|---|
 | `--config` | `FILE` | none | Read the JSON configuration file. The section below says what the file wins over. A file that is missing, empty, malformed or refused by validation exits `2`. |
-| `--device` | `SPEC` | `default` | The audio device: an ALSA name such as `plughw:CARD=Device,DEV=0`, `pipe:IN,OUT[,RATE]`, `flex:RADIO[:SLICE][@STATION]`, `ubersdr:INSTANCE`, `openwebrx:URL`, `iqcard:DEVICE` or `rtltcp:HOST[:PORT]`. |
-| `--capture-rate` | `HZ` | `48000` | The ALSA capture and playback rate. It must be a multiple of the modems' DSP rate, 12000 or 48000, or the modem exits `2`. Not used with `flex:`, `ubersdr:`, `openwebrx:`, `iqcard:` or `rtltcp:` devices, which bring their own clock (`iqcard:` takes `iqCard`.`sampleRate`). |
+| `--device` | `SPEC` | `default` | The audio device: an ALSA name such as `plughw:CARD=Device,DEV=0`, `pipe:IN,OUT[,RATE]`, `flex:RADIO[:SLICE][@STATION]`, `ubersdr:INSTANCE`, `openwebrx:URL`, `iqcard:DEVICE`, `rtltcp:HOST[:PORT]` or `iqpipe:[FIFO|-]` (raw IQ from a command, a FIFO or standard input; see [the SDR guide](../15-sdr-through-a-pipe.md)). |
+| `--capture-rate` | `HZ` | `48000` | The ALSA capture and playback rate. It must be a multiple of the modems' DSP rate, 12000 or 48000, or the modem exits `2`. Not used with `flex:`, `ubersdr:`, `openwebrx:`, `iqcard:`, `rtltcp:` or `iqpipe:` devices, which bring their own clock (`iqcard:` takes `iqCard`.`sampleRate`). |
 | `--kiss` | `PORT` | `8105` | The shared KISS TCP port. Every packet modem is on it, addressed by the sub-channel nibble. |
 | `--bind` | `ADDR` | `127.0.0.1` | The address every TCP listener binds to. `*` (or `0.0.0.0`) is every interface. Anything that is not an IP address exits `2`. |
 | `--modem` | `N:MODE[:FREQ]` | one `afsk1200` on sub-channel 0 when nothing names a modem | Add a modem on sub-channel `N` (0 to 15) in `MODE`, centred at `FREQ` Hz when given. Repeatable. `N` alone means `afsk1200`. With `--config`, a file that lists no modems has already been given `afsk1200` on sub-channel 0, so `--modem 1:bpsk300` runs two modems and `--modem 0:bpsk300` is refused as two modems on one sub-channel. A plugin mode cannot be written here, because its `pluginId:mode` name contains this flag's separator; it goes in the config file, and the flag says so and exits `2`. |
@@ -82,7 +82,7 @@ A `--two-tone` or `--tone` run is refused, with the reason on stderr, when:
 |---|---|
 | `--two-tone` and `--tone` are both given; they are two ways to run one test. | `2` |
 | The config file describes a monitor (`monitor` section), which has no transmitter. | `2` |
-| The device is `ubersdr:`, `openwebrx:`, `iqcard:` or `rtltcp:`, a receiver with nothing to key. | `1` |
+| The device is `ubersdr:`, `openwebrx:`, `iqcard:`, `rtltcp:` or `iqpipe:`, a receiver with nothing to key. | `1` |
 | Nothing keys the radio: no `--ptt` or `ptt` section and not a `flex:` device. `--wav-loop` and `pipe:` devices have no PTT either. | `1` |
 | `txTest.enabled` is `false` in the config file. | `1` |
 | The channel stayed busy for 60 s, so the test was withdrawn without keying. | `1` |
@@ -157,7 +157,7 @@ Options:
                           such as plughw:CARD=Device,DEV=0, pipe:IN,OUT[,RATE],
                           flex:RADIO[:SLICE][@STATION], ubersdr:INSTANCE,
                           openwebrx:URL, iqcard:DEVICE (IQ on a card's left and
-                          right inputs) or rtltcp:HOST[:PORT].
+                          right inputs), rtltcp:HOST[:PORT] or iqpipe:[FIFO|-].
   --capture-rate HZ       ALSA capture and playback rate (default 48000); it
                           must be a multiple of the modems' DSP rate, 12000 or
                           48000.

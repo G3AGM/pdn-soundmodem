@@ -119,11 +119,15 @@ internal abstract class StationDevice
 /// <param name="HasWaterfall">Whether the station serves a waterfall page.</param>
 /// <param name="OpenWebRx">The <c>"openwebrx"</c> section, or null.</param>
 /// <param name="IqCard">The <c>"iqCard"</c> section, or null.</param>
+/// <param name="IqPipe">The <c>"iqpipe"</c> section, or null.</param>
 internal sealed record DeviceSettings(
     UberSdrConfig? UberSdr, bool HasWaterfall, OpenWebRxConfig? OpenWebRx = null, IqCardConfig? IqCard = null)
 {
     /// <summary>The <c>"rtltcp"</c> section, or null.</summary>
     public RtlTcpConfig? RtlTcp { get; init; }
+
+    /// <summary>The <c>"iqpipe"</c> section, or null.</summary>
+    public IqPipeConfig? IqPipe { get; init; }
 }
 
 /// <summary>
