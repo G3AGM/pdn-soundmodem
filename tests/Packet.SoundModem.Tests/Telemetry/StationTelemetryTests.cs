@@ -17,6 +17,42 @@ public class StationTelemetryTests
     private static readonly DateTimeOffset Start = new(2026, 8, 24, 12, 0, 0, TimeSpan.Zero);
 
     [Fact]
+    public void The_Receive_Loops_Keeping_Up_Is_Published_When_A_Source_Is_Given()
+    {
+        var telemetry = new StationTelemetry(new FakeTime(Start))
+        {
+            ReceiveRate = () => new ReceiveRateSnapshot(
+                Samples: 1_440_000, Seconds: 100, BusySeconds: 99.5, RealTimeRatio: 0.3, Behind: true,
+                InputLosses: 7),
+        };
+
+        string text = telemetry.Exposition();
+
+        text.Should().Contain("pdn_receive_samples_total 1440000\n")
+            .And.Contain("pdn_receive_seconds_total 100\n")
+            .And.Contain("pdn_receive_busy_seconds_total 99.5\n")
+            .And.Contain("pdn_receive_realtime_ratio 0.3\n")
+            .And.Contain("pdn_receive_behind 1\n")
+            .And.Contain("pdn_receive_input_losses_total 7\n")
+            .And.Contain("# TYPE pdn_receive_samples_total counter");
+    }
+
+    [Fact]
+    public void No_Receive_Series_Without_A_Source_And_No_Ratio_Before_The_First_Window()
+    {
+        new StationTelemetry(new FakeTime(Start)).Exposition().Should().NotContain("pdn_receive_");
+
+        string early = new StationTelemetry(new FakeTime(Start))
+        {
+            ReceiveRate = () => new ReceiveRateSnapshot(4800, 0.1, 0.01, null, false, null),
+        }.Exposition();
+
+        early.Should().Contain("pdn_receive_behind 0\n")
+            .And.NotContain("pdn_receive_realtime_ratio")
+            .And.NotContain("pdn_receive_input_losses_total");
+    }
+
+    [Fact]
     public void A_Bit_Error_Does_Not_Become_A_Station()
     {
         // The gate that makes this safe to leave running for years. Of the 77 distinct callsigns

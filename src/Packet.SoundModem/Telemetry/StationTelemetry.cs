@@ -93,6 +93,13 @@ public sealed class StationTelemetry
         get { lock (_lock) { return _uncounted; } }
     }
 
+    /// <summary>
+    /// Where the receive loop's keeping-up figures come from (issue #649), published as the
+    /// <c>pdn_receive_*</c> series. Null leaves them out: a host that runs no receive loop of its
+    /// own, or more than one, has no single answer to give.
+    /// </summary>
+    public Func<ReceiveRateSnapshot>? ReceiveRate { get; set; }
+
     /// <summary>Stations currently held.</summary>
     public int StationCount
     {
@@ -250,6 +257,11 @@ public sealed class StationTelemetry
 
             Metric(text, "pdn_stations", "gauge", "Stations currently held.");
             text.Append(CultureInfo.InvariantCulture, $"pdn_stations {live.Length}\n");
+
+            if (ReceiveRate?.Invoke() is { } receive)
+            {
+                AppendReceiveRate(text, receive);
+            }
         }
 
         return text.ToString();
@@ -312,6 +324,38 @@ public sealed class StationTelemetry
         }
 
         return text.ToString();
+    }
+
+    private static void AppendReceiveRate(StringBuilder text, ReceiveRateSnapshot receive)
+    {
+        Metric(text, "pdn_receive_samples_total", "counter",
+            "Samples the audio input delivered to the receive loop, over pdn_receive_seconds_total.");
+        text.Append(CultureInfo.InvariantCulture, $"pdn_receive_samples_total {receive.Samples}\n");
+        Metric(text, "pdn_receive_seconds_total", "counter",
+            "Wall time the receive loop was measured over, leaving out spans while keyed or "
+            + "deliberately idle. rate(samples) / rate(seconds) / the sample rate is the share of "
+            + "real time reaching the modems.");
+        text.Append(CultureInfo.InvariantCulture, $"pdn_receive_seconds_total {receive.Seconds:R}\n");
+        Metric(text, "pdn_receive_busy_seconds_total", "counter",
+            "Of pdn_receive_seconds_total, the time the loop spent processing rather than waiting "
+            + "for audio. Close to it means the loop is the bottleneck.");
+        text.Append(CultureInfo.InvariantCulture, $"pdn_receive_busy_seconds_total {receive.BusySeconds:R}\n");
+        if (receive.RealTimeRatio is double ratio)
+        {
+            Metric(text, "pdn_receive_realtime_ratio", "gauge",
+                "Share of real time that reached the modems over the last minute; 1 is keeping up.");
+            text.Append(CultureInfo.InvariantCulture, $"pdn_receive_realtime_ratio {ratio:R}\n");
+        }
+
+        Metric(text, "pdn_receive_behind", "gauge",
+            "1 while the station is reported as behind real time (losing received audio), else 0.");
+        text.Append(CultureInfo.InvariantCulture, $"pdn_receive_behind {(receive.Behind ? 1 : 0)}\n");
+        if (receive.InputLosses is long lost)
+        {
+            Metric(text, "pdn_receive_input_losses_total", "counter",
+                "Times the audio input itself counted audio as lost: capture overruns, missing DAX packets, breaks in a receiver's stream.");
+            text.Append(CultureInfo.InvariantCulture, $"pdn_receive_input_losses_total {lost}\n");
+        }
     }
 
     private static void Metric(StringBuilder text, string name, string type, string help)
