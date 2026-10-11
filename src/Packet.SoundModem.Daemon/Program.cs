@@ -20,6 +20,7 @@ using Packet.SoundModem.Modems;
 using Packet.SoundModem.Station;
 using Packet.SoundModem.Survey;
 using Packet.SoundModem.Telemetry;
+using Packet.SoundModem.Updates;
 using Packet.SoundModem.Waterfall;
 using Packet.SoundModem.Ms110d;
 
@@ -535,6 +536,14 @@ foreach (string line in MailcastDeprecation.JournalLines(mailcastConfig))
 {
     deprecationJournal(line);
 }
+
+// Looks in packet-net's apt repository for a newer pdn-soundmodem (issue #583): once soon after
+// start-up, then once a day. Always on, with no setting to turn it off (Tom's decision on the
+// issue) - it never installs anything, and a station that cannot reach the repository (most
+// often an offline one) stays quiet rather than logging a failure. Started further down, once
+// there is a CancellationToken for it to run on; given to the waterfall page here so that a page
+// opened before the first check still shows whatever that check later finds.
+using var updateCheck = new UpdateCheck(TimeProvider.System, stationJournal.Write);
 
 // Mode names are checked, and the rate the shared channel runs at is settled, before the band
 // planner and the transmit-filter plan: both ask the catalogue what a mode occupies, and the
@@ -1342,6 +1351,9 @@ if (benchTxTest is null && waterfallConfig is not null)
             // the page hides the whole group, and the message would go out several times a
             // second to a browser that draws none of it.
             InputLevelMeter = DaemonConfig.ShowsMixerGroup(device, waterfallConfig, apiConfig),
+            // Issue #583: the page shows whatever this has found so far, including a check that
+            // ran before this page existed, and updates live as later checks complete.
+            Updates = updateCheck,
         },
         // One bind for every listener; the waterfall no longer carries its own.
         bindAddress);
@@ -1785,6 +1797,10 @@ bool radioLost = false;
 bool restartRequested = false;
 
 using var cancellation = new CancellationTokenSource();
+
+// Issue #583: started here, now that there is a token for it to run on. Independent of whether
+// a waterfall page exists at all - its journal line is worth having on a headless station too.
+updateCheck.Start(cancellation.Token);
 
 // Runtime configuration, on the waterfall's listener. Off unless a key is set, and refused
 // outright if there is no listener to hang it on - an "api" section on a station with no

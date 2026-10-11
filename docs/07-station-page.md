@@ -26,6 +26,10 @@ Open that in a browser on the same machine. Every key is in [`waterfall`](refere
 
 The wordmark carries the version the modem is running, and the first twelve characters of the commit after it. A build that is not a numbered release adds `dev` after the version. Hover it for the full sentence.
 
+When a newer pdn-soundmodem is in the [apt repository](01-install.md#add-the-repository), a plain notice appears under the header: the version available, the version you have, a link to what changed, and the command to upgrade (`sudo apt update && sudo apt install --only-upgrade pdn-soundmodem`, or a pointer to setting up the repository if you did not install from it). The check runs once soon after start-up and then once a day, by itself, with no setting to turn it off; it never installs anything, and a station with no internet reachable says nothing about it rather than logging a failure. The same line appears in the journal each time the check finds you behind. It is never shown on a public page, which is someone else's receiver and not your software to upgrade.
+
+![The update notice, reading "Version 0.88.0 is available (you have 0.50.0)" with a link to what changed and a link to the apt repository setup](images/update-notice.png)
+
 Beside the wordmark, a status pill reports the radio behind the station: a FlexRadio's frequency reference, or a web receiver's session state. It turns red when something is wrong and stays hidden on a sound-card station, which has no radio to ask.
 
 When a program on the same machine is listening to the station's audio, such as the mailcast receiver, a second pill names it: "listening: pdn-mailcast-receiver", with the name linking to that program's own page. It appears only while the program is connected, and never on a public page.
