@@ -112,6 +112,12 @@ internal static class VirtualAir
             {
                 AdvanceHolding(Volatile.Read(ref _now) + span.Ticks);
             }
+
+            // Letting go of the crank is a change too. A test whose step found it held, with a
+            // delay already armed, waits for the next signal; the last one AdvanceHolding gave
+            // was before the release, so without this one a step that could now go ahead would
+            // wait for something else to move first.
+            Signal();
         }
 
         /// <summary>
@@ -124,9 +130,15 @@ internal static class VirtualAir
         internal async Task AdvanceToAsync(DateTimeOffset until)
         {
             long target = (until - Epoch).Ticks;
-            while (Volatile.Read(ref _now) < target)
+            while (true)
             {
+                // The signal is taken before the clock is read, never after: see RunUntilAsync.
                 (Task changed, long? due) = Look();
+                if (Volatile.Read(ref _now) >= target)
+                {
+                    return;
+                }
+
                 if (due is long next && TryStep(Math.Min(next, target)))
                 {
                     continue;
@@ -148,9 +160,22 @@ internal static class VirtualAir
             _ = done.ContinueWith(_ => Signal(), CancellationToken.None,
                 TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
             long limit = Volatile.Read(ref _now) + GiveUpAfter.Ticks;
-            while (!done.IsCompleted)
+            while (true)
             {
+                // The signal first and the test second, never the other way round. The task
+                // usually completes on a pool thread, after the transmitter's own thread has
+                // moved on (EnqueueTransmit announces from a continuation), and its Signal
+                // replaces the signal it completes. Read IsCompleted first and a completion
+                // landing between that read and Look was signalled on the instance before the
+                // one this loop then waits on, and nothing ever completes that one: the wait ran
+                // out its 60 s with the frame long since sent (#686). Taken first, a completion
+                // after Look completes the signal in hand, and one before it is seen here.
                 (Task changed, long? due) = Look();
+                if (done.IsCompleted)
+                {
+                    break;
+                }
+
                 if (due is long next)
                 {
                     if (next > limit)
