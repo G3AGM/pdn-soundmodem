@@ -255,7 +255,7 @@ const sandbox = {
   document: document_, WebSocket: WebSocket_, console, fetch: fetch_, AudioContext: AudioContext_,
   setTimeout, clearTimeout, setInterval, clearInterval, requestAnimationFrame: cb => setTimeout(() => cb(performance.now()), 16),
   cancelAnimationFrame: clearTimeout, performance,
-  location: { host: `127.0.0.1:${process.env.PORT}`, protocol, pathname, reload: () => { reloads++; } },
+  location: { host: `127.0.0.1:${process.env.PORT}`, hostname: "127.0.0.1", protocol, pathname, reload: () => { reloads++; } },
   devicePixelRatio: 1, Int16Array, Float32Array, Uint8Array, Uint8ClampedArray, ArrayBuffer, DataView,
   Math, JSON, Date, Object, Array, String, Number, Boolean, Error, Map, Set, Promise, parseFloat, parseInt, isNaN,
   matchMedia: () => ({ matches: false, addEventListener: noop }),
@@ -738,6 +738,21 @@ deliverConfig(run("cfg.page"));
 deliverConfig("0123456789ab");
 deliverConfig("0123456789ab");
 
+// The programs listening through the channel audio stream (issue #586): as the config left the
+// chip on arrival (the test connects its readers before this probe starts), then driven through
+// the page's own socket handler with one name that gave a page port and one that did not, then
+// with nobody, which must hide the chip again.
+const listenersChip = () => ({
+  hidden: sandbox.document.getElementById("listeners").hidden === true,
+  html: sandbox.document.getElementById("listeners").innerHTML ?? "",
+});
+const listenersOnArrival = listenersChip();
+run(`ws.onmessage({ data: JSON.stringify({ type: "listeners", listeners: [` +
+  `{ name: "pdn-mailcast-receiver", pagePort: 8130 }, { name: "a <b> tool", pagePort: null }] }) })`);
+const listenersDriven = listenersChip();
+run(`ws.onmessage({ data: JSON.stringify({ type: "listeners", listeners: [] }) })`);
+const listenersCleared = listenersChip();
+
 // Tearing the links pane off into a window of its own, last, because it closes the pane behind it
 // and everything above wanted the pane as it was.
 sandbox.document.getElementById("linksDetach").click();
@@ -950,6 +965,9 @@ process.stdout.write(JSON.stringify({
   rsBadgeOnTxRowBackground: badgeBackground("fr tx", "id rs"),
   stampedVersion,
   configReloads,
+  listenersOnArrival,
+  listenersDriven,
+  listenersCleared,
   connected,
   txTestOffered,
   txTestOptions,

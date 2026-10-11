@@ -28,6 +28,8 @@ The wordmark carries the version the modem is running, and the first twelve char
 
 Beside the wordmark, a status pill reports the radio behind the station: a FlexRadio's frequency reference, or a web receiver's session state. It turns red when something is wrong and stays hidden on a sound-card station, which has no radio to ask.
 
+When a program on the same machine is listening to the station's audio, such as the mailcast receiver, a second pill names it: "listening: pdn-mailcast-receiver", with the name linking to that program's own page. It appears only while the program is connected, and never on a public page.
+
 Dial is the frequency your radio is tuned to, in MHz, with USB, LSB and FM beside it. Set it and the ruler grows an RF scale above the audio one, so the panel reads in band frequencies. On FM the box is labelled `Channel`, the RF arithmetic does not apply, and the ruler shows the channel once instead. [08-hf.md](08-hf.md) covers band placement.
 
 Span sets how much of the audio passband you see, from 2 kHz up to whatever the sample rate allows.

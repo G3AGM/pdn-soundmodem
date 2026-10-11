@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Net.WebSockets;
 using System.Text.Json;
 using AwesomeAssertions;
 using Microsoft.Extensions.Time.Testing;
@@ -207,6 +208,47 @@ public class WaterfallPageTests
         probe.ConfigReloads.Should().Equal([0, 1, 1],
             "a reconnect that announces the version the tab is running changes nothing, one that "
             + "announces another reloads the tab, and saying it again does not reload it twice");
+    }
+
+    /// <summary>
+    /// A program listening through the channel audio stream is named on the page, linked to its
+    /// own page on the host the browser used when it gave a port, and unlinked when it did not
+    /// (issue #586).
+    /// </summary>
+    [Fact]
+    public async Task A_Program_Listening_Through_The_Audio_Stream_Is_Named_And_Linked_To_Its_Page()
+    {
+        string node = ResolveNode();
+        Assert.SkipWhen(node.Length == 0, "node is not installed; the page cannot be executed");
+
+        var channel = new SoundModemChannel(SampleRate, randomSeed: 7);
+        channel.AddModem(0, sink => new Afsk1200Modem(SampleRate, sink));
+        int port = FreePorts.Next();
+        await using var server = new WaterfallWebServer(channel, port);
+        server.Start();
+
+        using var reader = new ClientWebSocket();
+        using var connecting = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        await reader.ConnectAsync(new Uri($"ws://127.0.0.1:{port}{ChannelAudioStream.Path}"), connecting.Token);
+        await reader.SendAsync(
+            """{"name":"pdn-mailcast-receiver","pagePort":8130}"""u8.ToArray(),
+            WebSocketMessageType.Text, true, connecting.Token);
+        for (int i = 0; i < 100 && server.ChannelAudio.Listeners.Count == 0; i++)
+        {
+            await Task.Delay(20, connecting.Token);
+        }
+
+        Probe probe = await RunProbeAsync(node, port);
+
+        probe.Thrown.Should().BeEmpty();
+        probe.ListenersOnArrival.Hidden.Should().BeFalse("the config names the reader already connected");
+        probe.ListenersOnArrival.Html.Should().Be(
+            "listening: <a href=\"http://127.0.0.1:8130/\" target=\"_blank\" rel=\"noopener\">pdn-mailcast-receiver</a>");
+        probe.ListenersDriven.Html.Should().Be(
+            "listening: <a href=\"http://127.0.0.1:8130/\" target=\"_blank\" rel=\"noopener\">pdn-mailcast-receiver</a>, "
+            + "a &lt;b&gt; tool",
+            "a name with no page port is shown unlinked, and escaped like anything else from outside");
+        probe.ListenersCleared.Hidden.Should().BeTrue("with nobody listening the chip goes");
     }
 
     /// <summary>
@@ -2344,6 +2386,8 @@ public class WaterfallPageTests
         bool AboutHidden,
         IReadOnlyDictionary<string, bool> Hidden);
 
+    private sealed record ListenersChip(bool Hidden, string Html);
+
     private sealed record Probe(
         string? SocketUrl,
         string? LinksWindowUrl,
@@ -2416,6 +2460,9 @@ public class WaterfallPageTests
         LinksBar LinksMine,
         string StampedVersion,
         int[] ConfigReloads,
+        ListenersChip ListenersOnArrival,
+        ListenersChip ListenersDriven,
+        ListenersChip ListenersCleared,
         MixerPanel? MixerOnArrival,
         MixerPanel? MixerAfterGain,
         MixerPanel? MixerAfterPlay,

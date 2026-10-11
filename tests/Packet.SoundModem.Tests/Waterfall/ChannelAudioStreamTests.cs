@@ -411,6 +411,44 @@ public class ChannelAudioStreamTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_Reader_That_Names_Itself_Is_Listed_With_Its_Page_Port_Until_It_Goes()
+    {
+        var receiver = await ConnectAsync();
+        await Receive(receiver); // hello
+        using var recorder = await ConnectAsync();
+        await Receive(recorder); // hello
+        using var anonymous = await ConnectAsync();
+        await Receive(anonymous); // hello, and nothing more: a reader need not say who it is
+
+        await SendText(receiver, """{"name":"pdn-mailcast-receiver","pagePort":8130}""");
+        await SendText(recorder, """{"name":"recorder"}""");
+
+        await WaitUntil(() => Stream().Listeners.Count == 2, "both named readers are listed");
+        Stream().Listeners.Should().BeEquivalentTo(
+            [new Listener("pdn-mailcast-receiver", 8130), new Listener("recorder", null)],
+            "a reader that gave no page port is listed without one, and one that gave no name not at all");
+
+        await receiver.CloseAsync(WebSocketCloseStatus.NormalClosure, null, _cancellation.Token);
+        receiver.Dispose();
+
+        await WaitUntil(() => Stream().Listeners.Count == 1, "a reader that goes is taken off the list");
+        Stream().Listeners.Should().Equal(new Listener("recorder", null));
+    }
+
+    [Theory]
+    [InlineData("  pdn-mailcast-receiver  ", "pdn-mailcast-receiver")]
+    [InlineData("bell\u0007 and\nnewline", "bell andnewline")]
+    [InlineData("caf\u00e9", "caf")]
+    [InlineData("\u00e9\u00e9", null)]
+    [InlineData("   ", null)]
+    public void A_Name_Is_Kept_To_Printable_Ascii(string escaped, string? expected) =>
+        ChannelAudioStream.CleanName(System.Text.RegularExpressions.Regex.Unescape(escaped)).Should().Be(expected);
+
+    [Fact]
+    public void A_Long_Name_Is_Cut_To_The_Cap() =>
+        ChannelAudioStream.CleanName(new string('x', 200)).Should().HaveLength(ChannelAudioStream.MaxNameLength);
+
+    [Fact]
     public async Task Asking_For_A_Band_Fires_The_Hook_And_Clearing_It_Fires_Null()
     {
         var seen = new List<(int LowHz, int HighHz)?>();

@@ -46,6 +46,8 @@
                   background: rgba(255,255,255,.06); font-size: 12px; }
   .radio-status.bad { background: rgba(255,120,90,.16); color: #ff9a7a; }
   .radio-status.quiet { color: var(--muted); }
+  .radio-status a { color: var(--amber); text-decoration: none; }
+  .radio-status a:hover { text-decoration: underline; }
   /* Public deployment: a paragraph for a visitor who has never seen a packet waterfall, and
      whose receiver they are hearing. Not shown on the operator's own page. */
   #about { padding: 7px 14px; background: var(--panel); border-bottom: 1px solid var(--edge);
@@ -497,6 +499,9 @@
     <!-- The radio's frequency reference, when it has one to report. Hidden entirely rather
          than shown empty, so a soundcard station is not told about an absent oscillator. -->
     <span id="radioStatus" class="radio-status" hidden></span>
+    <!-- Programs on this machine listening through the channel audio stream, named as they
+         named themselves, each linked to its own page when it said where that is. -->
+    <span id="listeners" class="radio-status quiet" hidden></span>
   </div>
 
   <!-- Named, along with the span and the levels below, so the public flavour can take them
@@ -885,6 +890,25 @@ function setRadioStatus(status) {
   el.textContent = status;
   el.classList.toggle("bad", /UNLOCKED|reboot|unknown|unreachable|refus|gave up|could not/i.test(status));
   el.classList.toggle("quiet", /^(idle|no viewers|connecting)\b/i.test(status));
+}
+
+// Programs on this machine reading the channel audio stream that said who they are:
+// [{name, pagePort}]. A name with a page port links to that port on the host this page was
+// loaded from, which is the same machine; the program's page is plain HTTP whatever this one
+// came in on. Never sent to a public page, and not shown in the detached links window.
+function setListeners(list) {
+  const el = document.getElementById("listeners");
+  if (!el) return;
+  list = Array.isArray(list) ? list : [];
+  if (!list.length || detached) { el.hidden = true; el.textContent = ""; return; }
+  el.innerHTML = "listening: " + list.map(l => {
+    const name = esc(String(l.name || ""));
+    const port = Number(l.pagePort);
+    if (!Number.isInteger(port) || port < 1 || port > 65535) return name;
+    const href = `http://${location.hostname}:${port}/`;
+    return `<a href="${esc(href)}" target="_blank" rel="noopener">${name}</a>`;
+  }).join(", ");
+  el.hidden = false;
 }
 
 // ---------------------------------------------------------------- TX test
@@ -2645,10 +2669,13 @@ function connect() {
         applyPublicFlavour();
         applyDaemonVersion();
         setRadioStatus(cfg.radioStatus);
+        setListeners(cfg.listeners);
         syncTxTestRunning();
         renderChips(); resizeAll(); drawRuler(); drawOverlay();
       } else if (msg.type === "radio") {
         setRadioStatus(msg.status);
+      } else if (msg.type === "listeners") {
+        setListeners(msg.listeners);
       } else if (msg.type === "tx") {
         setTransmitReading(msg);
       } else if (msg.type === "txtest") {

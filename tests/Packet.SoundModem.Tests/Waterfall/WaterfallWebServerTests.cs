@@ -1451,6 +1451,66 @@ public class WaterfallWebServerTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task An_Operators_Page_Is_Told_Which_Programs_Listen_Through_The_Audio_Stream()
+    {
+        using var page = new ClientWebSocket();
+        await page.ConnectAsync(new Uri($"ws://127.0.0.1:{_port}/ws"), _cancellation.Token);
+        using (JsonDocument config = await NextTextAsync(page))
+        {
+            config.RootElement.GetProperty("listeners").GetArrayLength().Should().Be(0);
+        }
+
+        using var reader = new ClientWebSocket();
+        await reader.ConnectAsync(
+            new Uri($"ws://127.0.0.1:{_port}{ChannelAudioStream.Path}"), _cancellation.Token);
+        await reader.SendAsync(
+            """{"name":"pdn-mailcast-receiver","pagePort":8130}"""u8.ToArray(),
+            WebSocketMessageType.Text, true, _cancellation.Token);
+
+        JsonElement listeners = default;
+        for (int i = 0; i < 50 && listeners.ValueKind == JsonValueKind.Undefined; i++)
+        {
+            using JsonDocument message = await NextTextAsync(page);
+            if (message.RootElement.GetProperty("type").GetString() == "listeners")
+            {
+                listeners = message.RootElement.GetProperty("listeners").Clone();
+            }
+        }
+
+        listeners.GetArrayLength().Should().Be(1);
+        listeners[0].GetProperty("name").GetString().Should().Be("pdn-mailcast-receiver");
+        listeners[0].GetProperty("pagePort").GetInt32().Should().Be(8130);
+    }
+
+    [Fact]
+    public async Task A_Public_Page_Is_Never_Told_Which_Programs_Listen_Through_The_Audio_Stream()
+    {
+        int port = FreePorts.Next();
+        await using var server = new WaterfallWebServer(_channel, port, new WaterfallOptions { Public = true });
+        server.Start();
+
+        using var reader = new ClientWebSocket();
+        await reader.ConnectAsync(
+            new Uri($"ws://127.0.0.1:{port}{ChannelAudioStream.Path}"), _cancellation.Token);
+        await reader.SendAsync(
+            """{"name":"pdn-mailcast-receiver","pagePort":8130}"""u8.ToArray(),
+            WebSocketMessageType.Text, true, _cancellation.Token);
+        for (int i = 0; i < 100 && server.ChannelAudio.Listeners.Count == 0; i++)
+        {
+            await Task.Delay(20, _cancellation.Token);
+        }
+
+        server.ChannelAudio.Listeners.Should().HaveCount(1, "the reader did name itself");
+
+        using var page = new ClientWebSocket();
+        await page.ConnectAsync(new Uri($"ws://127.0.0.1:{port}/ws"), _cancellation.Token);
+        using JsonDocument config = await NextTextAsync(page);
+
+        config.RootElement.GetProperty("listeners").ValueKind.Should().Be(JsonValueKind.Null,
+            "programs on the station's own machine are not a visitor's business");
+    }
+
+    [Fact]
     public async Task A_Public_Page_Is_Told_Its_Title_And_Whose_Receiver_It_Listens_Through()
     {
         int port = FreePorts.Next();

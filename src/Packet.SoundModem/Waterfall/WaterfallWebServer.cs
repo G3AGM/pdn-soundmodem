@@ -648,8 +648,36 @@ public sealed class WaterfallWebServer : IAsyncDisposable
             ? new Audio.InputLevelMeter(_options.TimeProvider)
             : null;
         _channelAudioStream = new ChannelAudioStream(channel.SampleRate, line => Journal(line));
+        // The operator's own page names the programs listening through the stream (issue #586).
+        // A public page never does: they are this machine's business, and their pages are on a
+        // host a visitor cannot reach.
+        if (!_options.Public)
+        {
+            _channelAudioStream.ListenersChanged = OnListenersChanged;
+        }
+
         Url = "";
     }
+
+    private IReadOnlyList<Listener> _listeners = [];
+
+    /// <summary>The channel audio stream this server serves, for tests.</summary>
+    internal ChannelAudioStream ChannelAudio => _channelAudioStream;
+
+    private void OnListenersChanged(IReadOnlyList<Listener> listeners)
+    {
+        _listeners = listeners;
+        if (_source is not null)
+        {
+            _configMessage = BuildConfigMessage(); // before Start, Start's own build picks it up
+        }
+
+        Broadcast(WebSocketMessageType.Text, JsonSerializer.SerializeToUtf8Bytes(
+            new { type = "listeners", listeners = ListenersForPage() }, Json));
+    }
+
+    private object ListenersForPage() =>
+        _listeners.Select(l => new { name = l.Name, pagePort = l.PagePort }).ToArray();
 
     /// <summary>The listen port: this server's own, or the router's once one is serving it.</summary>
     public int Port { get; private set; }
@@ -1193,6 +1221,9 @@ public sealed class WaterfallWebServer : IAsyncDisposable
             receiver = _receiverDescription,
             receiverUrl = _receiverUrl,
             receiverKind = _options.ReceiverKind,
+            // Programs reading the channel audio stream that said who they are; never on a
+            // public page, which is never told about them in the first place.
+            listeners = _options.Public ? null : ListenersForPage(),
             pickerUrl = _options.PickerUrl,
             // TX test: null on every page that is not the operator's own, so the control is
             // absent rather than hidden - a public page is never sent the shape of it.

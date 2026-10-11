@@ -2,6 +2,7 @@ using System.Buffers.Binary;
 using System.Collections.Specialized;
 using System.Net;
 using System.Net.WebSockets;
+using System.Text;
 using System.Text.Json;
 using Packet.SoundModem.Channel;
 
@@ -79,6 +80,8 @@ internal sealed class ChannelAudioStream
     private volatile Client[] _clients = [];
     private (int LowHz, int HighHz)? _lastReportedBand;
     private Action<(int LowHz, int HighHz)?>? _bandRequested;
+    private Listener[] _lastReportedListeners = [];
+    private Action<IReadOnlyList<Listener>>? _listenersChanged;
 
     // The block being gathered: the receive thread's alone.
     private readonly float[] _block;
@@ -127,6 +130,47 @@ internal sealed class ChannelAudioStream
             }
         }
     }
+
+    /// <summary>
+    /// Called with every connected reader that has said its name (issue #586), whenever that list
+    /// changes: a named reader joins, renames itself, gives or drops its page port, or goes.
+    /// Setting it calls it straight away with the list as it stands. Called under this stream's
+    /// own lock, in order, so it must return promptly.
+    /// </summary>
+    public Action<IReadOnlyList<Listener>>? ListenersChanged
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _listenersChanged;
+            }
+        }
+
+        set
+        {
+            lock (_gate)
+            {
+                _listenersChanged = value;
+                value?.Invoke(_lastReportedListeners);
+            }
+        }
+    }
+
+    /// <summary>The named readers as last reported to <see cref="ListenersChanged"/>.</summary>
+    internal IReadOnlyList<Listener> Listeners
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _lastReportedListeners;
+            }
+        }
+    }
+
+    /// <summary>The longest name a reader may give itself; anything longer is cut.</summary>
+    internal const int MaxNameLength = 64;
 
     /// <summary>How many samples a whole block holds.</summary>
     internal int BlockSamples => _blockSamples;
@@ -345,7 +389,7 @@ internal sealed class ChannelAudioStream
             if (root.TryGetProperty("name", out JsonElement nameElement)
                 && nameElement.ValueKind == JsonValueKind.String)
             {
-                client.Name = nameElement.GetString();
+                client.Name = CleanName(nameElement.GetString());
             }
 
             if (root.TryGetProperty("pagePort", out JsonElement portElement)
@@ -356,6 +400,7 @@ internal sealed class ChannelAudioStream
                 client.PagePort = pagePort;
             }
 
+            RecomputeListeners();
             if (!root.TryGetProperty("band", out JsonElement bandElement))
             {
                 return;
@@ -477,6 +522,73 @@ internal sealed class ChannelAudioStream
             _clients = Array.FindAll(_clients, c => !ReferenceEquals(c, client));
             client.Band = null;
             RecomputeBandLocked();
+            RecomputeListenersLocked();
+        }
+    }
+
+    /// <summary>
+    /// A reader's name as the station page shows it: printable ASCII only, trimmed, at most
+    /// <see cref="MaxNameLength"/> characters; null when nothing is left. The page escapes it as
+    /// well, but a name is another program's words and has no business carrying anything else.
+    /// </summary>
+    internal static string? CleanName(string? name)
+    {
+        if (name is null)
+        {
+            return null;
+        }
+
+        var kept = new StringBuilder(Math.Min(name.Length, MaxNameLength));
+        foreach (char c in name)
+        {
+            if (c is >= ' ' and <= '~')
+            {
+                kept.Append(c);
+            }
+        }
+
+        string cleaned = kept.ToString().Trim();
+        if (cleaned.Length > MaxNameLength)
+        {
+            cleaned = cleaned[..MaxNameLength].TrimEnd();
+        }
+
+        return cleaned.Length == 0 ? null : cleaned;
+    }
+
+    private void RecomputeListeners()
+    {
+        lock (_gate)
+        {
+            RecomputeListenersLocked();
+        }
+    }
+
+    /// <summary>Under <see cref="_gate"/>, so each change is reported in order.</summary>
+    private void RecomputeListenersLocked()
+    {
+        var named = new List<Listener>();
+        foreach (Client client in _clients)
+        {
+            if (client.Name is string name)
+            {
+                named.Add(new Listener(name, client.PagePort));
+            }
+        }
+
+        if (named.SequenceEqual(_lastReportedListeners))
+        {
+            return;
+        }
+
+        _lastReportedListeners = [.. named];
+        try
+        {
+            _listenersChanged?.Invoke(_lastReportedListeners);
+        }
+        catch (Exception e)
+        {
+            Journal($"channel-audio: the listeners handler failed: {e.Message}");
         }
     }
 
@@ -732,3 +844,8 @@ internal sealed class ChannelAudioStream
         }
     }
 }
+
+/// <summary>A program reading the channel audio stream that said who it is (issue #586).</summary>
+/// <param name="Name">Its name, cleaned by <see cref="ChannelAudioStream.CleanName"/>.</param>
+/// <param name="PagePort">Its own page's port on this machine, when it gave one.</param>
+public readonly record struct Listener(string Name, int? PagePort);
