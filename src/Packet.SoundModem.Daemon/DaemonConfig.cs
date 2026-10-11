@@ -965,6 +965,50 @@ public sealed class OpenWebRxConfig
 }
 
 /// <summary>
+/// Settings used only when Device is <c>iqcard:&lt;alsa device&gt;</c> - a receive-only station
+/// taking IQ from a sound card's left and right inputs (a Xiegu G90's IQ output, a SoftRock).
+/// Ignored for every other device. Where the channel listens is not here: that comes from the band
+/// plan or <c>dialFrequency</c>; this says where the card's IQ is centred and how the card is wired.
+/// </summary>
+public sealed class IqCardConfig
+{
+    /// <summary>The RF frequency the card's IQ is centred on, Hz. Absent with a <c>"rig"</c>
+    /// section, the rig's dial plus <see cref="CentreOffsetHz"/> is used instead.</summary>
+    public double? CentreFrequency { get; set; }
+
+    /// <summary>Added to the rig's dial to give the IQ centre, Hz, for a radio whose IQ output is
+    /// not centred on its dial. Default 0. Only with a <c>"rig"</c> section and no
+    /// <see cref="CentreFrequency"/>.</summary>
+    public double? CentreOffsetHz { get; set; }
+
+    /// <summary>The card's capture rate, Hz. Default 48000.</summary>
+    public int? SampleRate { get; set; }
+
+    /// <summary>Take I from the right input and Q from the left. Default false.</summary>
+    public bool SwapIq { get; set; }
+
+    /// <summary>How much louder Q is than I on this card, dB, to be divided out. Default 0.</summary>
+    public double? GainImbalanceDb { get; set; }
+
+    /// <summary>How far Q is from quadrature with I on this card, degrees, to be taken out.
+    /// Default 0.</summary>
+    public double? PhaseImbalanceDegrees { get; set; }
+
+    /// <summary>Bottom of the SSB filter, Hz from the dial. Default 150.</summary>
+    public double? SsbLowHz { get; set; }
+
+    /// <summary>Top of the SSB filter, Hz from the dial. Default 3450.</summary>
+    public double? SsbHighHz { get; set; }
+
+    /// <summary>Linear gain on the demodulated audio. Default 1.0.</summary>
+    public double? Gain { get; set; }
+
+    /// <summary>Keys in this section the daemon does not know; reported at start-up.</summary>
+    [JsonExtensionData]
+    public Dictionary<string, JsonElement>? UnknownSettings { get; set; }
+}
+
+/// <summary>
 /// Flavour B: one daemon fronting many UberSDR web receivers, with a page that lists them and a
 /// visitor picking one. Null (the default) is flavour A, one receiver or one radio per process.
 /// </summary>
@@ -1633,6 +1677,10 @@ public sealed class DaemonConfig
     /// <summary>OpenWebRX stream params (Device <c>openwebrx:</c>); null = defaults. Ignored for
     /// every other device.</summary>
     public OpenWebRxConfig? OpenWebRx { get; set; }
+
+    /// <summary>Sound-card IQ settings (Device <c>iqcard:</c>); null = defaults. Ignored for every
+    /// other device.</summary>
+    public IqCardConfig? IqCard { get; set; }
 
     /// <summary>Browser waterfall endpoint; null = disabled.</summary>
     public WaterfallConfig? Waterfall { get; set; }
@@ -2833,6 +2881,7 @@ public sealed class DaemonConfig
         Unknown("api", config.Api?.UnknownSettings);
         Unknown("ubersdr", config.UberSdr?.UnknownSettings);
         Unknown("openwebrx", config.OpenWebRx?.UnknownSettings);
+        Unknown("iqCard", config.IqCard?.UnknownSettings);
         Unknown("frameLog", config.FrameLog?.UnknownSettings);
         Unknown("survey", config.Survey?.UnknownSettings);
         Unknown("rawCapture", config.RawCapture?.UnknownSettings);

@@ -38,8 +38,9 @@ internal static class Usage
                                   runs with /etc/pdn-soundmodem/soundmodem.json.
           --device SPEC           The audio device (default "default"): an ALSA name
                                   such as plughw:CARD=Device,DEV=0, pipe:IN,OUT[,RATE],
-                                  flex:RADIO[:SLICE][@STATION], ubersdr:INSTANCE or
-                                  openwebrx:URL.
+                                  flex:RADIO[:SLICE][@STATION], ubersdr:INSTANCE,
+                                  openwebrx:URL or iqcard:DEVICE (IQ on a card's left
+                                  and right inputs).
           --capture-rate HZ       ALSA capture and playback rate (default 48000); it
                                   must be a multiple of the modems' DSP rate, 12000 or
                                   48000.
