@@ -152,6 +152,7 @@ public sealed class RtlTcpIqSource : IIqSource, IDisposable
     private long _samplesLost;
     private long _reconnects;
     private long _profileDrops;
+    private long _bytesReceived;
 
     /// <summary>Makes a source for the server at <paramref name="endpoint"/>; nothing is opened
     /// until <see cref="OpenAsync"/>.</summary>
@@ -220,6 +221,9 @@ public sealed class RtlTcpIqSource : IIqSource, IDisposable
 
     /// <summary>Reconnects since opening.</summary>
     public long Reconnects => Interlocked.Read(ref _reconnects);
+
+    /// <summary>Bytes of IQ received since opening, kept or not.</summary>
+    public long BytesReceived => Interlocked.Read(ref _bytesReceived);
 
     /// <summary>Times the stream was dropped for arriving at the wrong rate.</summary>
     public long ProfileDrops => Interlocked.Read(ref _profileDrops);
@@ -396,6 +400,7 @@ public sealed class RtlTcpIqSource : IIqSource, IDisposable
 
             Span<byte> bytes = _bytes.AsSpan(0, even);
             DateTimeOffset now = _time.GetUtcNow();
+            Interlocked.Add(ref _bytesReceived, got);
             _goneSince = now;
             if (_rateWatch is not null)
             {
