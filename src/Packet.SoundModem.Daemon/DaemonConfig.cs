@@ -981,6 +981,12 @@ public sealed class IqCardConfig
     /// <see cref="CentreFrequency"/>.</summary>
     public double? CentreOffsetHz { get; set; }
 
+    /// <summary>Where the channel's dial sits from the IQ centre, Hz, when the band plan puts the
+    /// rig there itself (a <c>"rig"</c> section, no <see cref="CentreFrequency"/>): the rig is tuned
+    /// this far below the dial, so the channel is clear of the card's DC offset and hum. Default an
+    /// eighth of the sample rate, 6000 at 48 kHz (more for FM).</summary>
+    public double? ChannelOffsetHz { get; set; }
+
     /// <summary>The card's capture rate, Hz. Default 48000.</summary>
     public int? SampleRate { get; set; }
 

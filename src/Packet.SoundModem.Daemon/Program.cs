@@ -2409,7 +2409,7 @@ if (rigConfig is not null)
     RigTuning? rigPlan = bandPlan is null
         ? null
         : new RigTuning(
-            (long)Math.Round(bandPlan.DialHz),
+            (long)Math.Round(bandPlan.DialHz + stationDevice.RigDialOffsetHz(bandPlan.Sideband)),
             rigConfig.Mode?.ToUpperInvariant() ?? RigModes.ForSideband(bandPlan.Sideband),
             rigConfig.PassbandHz ?? (bandPlan.IsFm ? 0 : (int)Math.Round(bandPlan.Window.WidthHz)));
     rig = new RigControl(new RigControlOptions

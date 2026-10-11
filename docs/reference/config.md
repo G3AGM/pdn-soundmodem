@@ -553,6 +553,7 @@ Read for an `iqcard:` device: IQ on a sound card's left (I) and right (Q) inputs
 |---|---|---|---|
 | `centreFrequency` | number | absent: the rig's dial | The RF frequency the IQ is centred on, in Hz. |
 | `centreOffsetHz` | number | `0` | With a `rig` section and no `centreFrequency`, added to the rig's dial to give the centre, for a radio whose IQ is not centred on its dial. |
+| `channelOffsetHz` | number | an eighth of `sampleRate` (6000 at 48 kHz); for `"sideband": "fm"` at least 9000 | With a `rig` section, a band plan and no `centreFrequency`: how far above the IQ centre the channel's dial lands. The rig is tuned this far (plus `centreOffsetHz`) below the band plan's dial, so the card's DC offset and hum are clear of the channel. Must be inside half the sample rate. |
 | `sampleRate` | int | `48000` | The card's capture rate, 8000 to 768000. Any rate: the station resamples. |
 | `swapIq` | bool | `false` | Take I from the right input and Q from the left. |
 | `gainImbalanceDb` | number | `0` | How much louder Q is than I on this card, in dB, to be divided out; within 6 either way. |
@@ -563,7 +564,7 @@ Read for an `iqcard:` device: IQ on a sound card's left (I) and right (Q) inputs
 
 - The channel is tuned by the band plan: every modem needs an `rfFrequency`, or `dialFrequency` must be set (`the IQ from X has to be told where to listen within the card's band ...`).
 - The centre comes from `centreFrequency`, or, with a `rig` section, from the rig's dial, which is then followed as the rig moves. Neither is exit 2 (`needs to know what RF frequency the card's IQ is centred on`); a rig that has not answered yet is exit 1, and the service retries.
-- A dial further from the centre than the card carries is exit 2 (`cannot hear the dial`). A centre inside the channel's audio is a warning: the card's DC offset and hum are heard there.
+- A dial further from the centre than the card carries is exit 2 (`cannot hear the dial`). A centre inside the channel's audio, or within 1 kHz of it (a channel on the centre included), is a warning: the card's DC offset and hum are heard there.
 - About a minute after start-up the journal gives the balance measured on the card (`iq: the card's balance over 60 s: ...`): the figures to put in `gainImbalanceDb` and `phaseImbalanceDegrees`.
 - A capture overrun is marked in the audio as a gap of its own length, not spliced, and counted where the channel audio stream counts lost audio.
 - The card's mixer is not touched. Refused, exit 2: a `sampleRate` outside 8000 to 768000; a `centreFrequency` of 0 or less; an imbalance outside the limits above; `ssbLowHz` and `ssbHighHz` that do not rise from 0; a `gain` of 0 or less; any `ptt`.

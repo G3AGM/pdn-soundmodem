@@ -63,6 +63,7 @@ public class IqCardDeviceTests
         { new IqCardConfig { PhaseImbalanceDegrees = -45 }, "phase imbalance" },
         { new IqCardConfig { SsbLowHz = 3000, SsbHighHz = 300 }, "\"ssbLowHz\"" },
         { new IqCardConfig { Gain = 0 }, "\"gain\"" },
+        { new IqCardConfig { ChannelOffsetHz = 30000 }, "\"channelOffsetHz\" (30000)" },
     };
 
     [Theory]
@@ -107,17 +108,52 @@ public class IqCardDeviceTests
     }
 
     [Theory]
+    [InlineData("usb", 0, true)]       // on the centre: DC and hum 150 Hz under the audio
+    [InlineData("lsb", 0, true)]
     [InlineData("usb", -1000, true)]   // the centre 1 kHz above a USB dial: in its audio
-    [InlineData("usb", 1000, false)]   // below it: clear
+    [InlineData("usb", 500, true)]     // 650 Hz under the audio's bottom edge: inside the guard
+    [InlineData("usb", 1000, false)]   // 1150 Hz under it: clear
     [InlineData("usb", 6000, false)]
     [InlineData("lsb", 1000, true)]    // the centre 1 kHz below an LSB dial: in its audio
     [InlineData("lsb", -1000, false)]
+    [InlineData("lsb", 6000, false)]
     [InlineData("fm", 3000, true)]
+    [InlineData("fm", 8500, true)]     // 500 Hz outside the 16 kHz IF
     [InlineData("fm", 12000, false)]
-    public void A_Centre_Inside_The_Channels_Audio_Is_Noticed(string sideband, double offsetHz, bool inside)
+    public void A_Centre_In_Or_Beside_The_Channels_Audio_Is_Noticed(string sideband, double offsetHz, bool near)
     {
-        IqCardStationDevice.CentreInPassband(IqCardStationDevice.Channel(null, sideband, offsetHz))
-            .Should().Be(inside);
+        IqCardStationDevice.CentreNearChannel(IqCardStationDevice.Channel(null, sideband, offsetHz))
+            .Should().Be(near);
+    }
+
+    [Theory]
+    [InlineData("usb", null, null, 48000, -6000)]     // an eighth of 48 kHz below the dial
+    [InlineData("lsb", null, null, 48000, -6000)]
+    [InlineData("usb", null, null, 96000, -12000)]
+    [InlineData("fm", null, null, 48000, -9000)]      // the 16 kHz IF's half plus the guard
+    [InlineData("usb", 4000.0, null, 48000, -4000)]   // as configured
+    [InlineData("usb", null, 1500.0, 48000, -7500)]   // and less a radio's own IQ offset
+    public void With_The_Centre_Read_Off_A_Rig_The_Rig_Goes_Beside_The_Dial_So_The_Channel_Is_Off_Centre(
+        string sideband, double? channelOffset, double? centreOffset, int rate, double rigOffset)
+    {
+        var config = new IqCardConfig { ChannelOffsetHz = channelOffset, CentreOffsetHz = centreOffset, SampleRate = rate };
+        StationDevice station = DeviceKinds.Resolve("iqcard:hw:G90", wavLoopPath: null, NoSettings with { IqCard = config });
+
+        station.RigDialOffsetHz(sideband).Should().Be(rigOffset);
+
+        // Where that leaves the channel: the centre is the rig's dial plus the radio's offset.
+        double channelFromCentre = -(rigOffset + (centreOffset ?? 0));
+        IqCardStationDevice.CentreNearChannel(IqCardStationDevice.Channel(config, sideband, channelFromCentre))
+            .Should().BeFalse("the default offset clears the card's DC and hum");
+    }
+
+    [Fact]
+    public void A_Stated_Centre_Leaves_The_Rig_On_The_Dial_And_Every_Other_Device_Too()
+    {
+        DeviceKinds.Resolve("iqcard:hw:G90", wavLoopPath: null, NoSettings with { IqCard = new IqCardConfig { CentreFrequency = 7_040_000 } })
+            .RigDialOffsetHz("usb").Should().Be(0);
+        DeviceKinds.Resolve("plughw:CARD=Device,DEV=0", wavLoopPath: null, NoSettings)
+            .RigDialOffsetHz("usb").Should().Be(0);
     }
 
     [Fact]

@@ -74,6 +74,30 @@ internal static class CardSynth
         return pcm;
     }
 
+    /// <summary>
+    /// Adds a sound card's own DC offset and mains hum to IQ at <paramref name="rate"/>: 1 % of
+    /// full scale on I and 0.7 % on Q, and 50, 100 and 150 Hz at -50, -55 and -60 dBFS on both,
+    /// each at a phase set by <paramref name="seed"/>.
+    /// </summary>
+    public static void AddDcAndHum(Span<float> iq, int rate, int seed)
+    {
+        var random = new Random(seed + 9_000_000);
+        double[] hz = [50, 100, 150];
+        double[] amplitude = [Math.Pow(10, -50 / 20.0), Math.Pow(10, -55 / 20.0), Math.Pow(10, -60 / 20.0)];
+        double[] phase = [random.NextDouble() * 2 * Math.PI, random.NextDouble() * 2 * Math.PI, random.NextDouble() * 2 * Math.PI];
+        for (int k = 0; k + 1 < iq.Length; k += 2)
+        {
+            double hum = 0;
+            for (int h = 0; h < hz.Length; h++)
+            {
+                hum += amplitude[h] * Math.Sin((2 * Math.PI * hz[h] * (k / 2) / rate) + phase[h]);
+            }
+
+            iq[k] += (float)(0.010 + hum);
+            iq[k + 1] += (float)(0.007 + hum);
+        }
+    }
+
     private static short Pcm(double v) =>
         (short)Math.Clamp(Math.Round(v * 32768), short.MinValue, short.MaxValue);
 }
@@ -127,6 +151,17 @@ internal enum CardArm
     /// source, with a signal 34 dB stronger than the wanted one on the channel's mirror: what the
     /// correction is for.</summary>
     CorrectedCardWithImage,
+
+    /// <summary>The matched card with the channel on the IQ centre itself (dial at 0 Hz): what a
+    /// rig tuned to the dial would give, with nothing else wrong.</summary>
+    CardAtCentre,
+
+    /// <summary>The matched card at the 6 kHz default offset, with the card's DC offset and mains
+    /// hum added (see <see cref="SoundCardIqBench"/>).</summary>
+    CardWithDcAndHum,
+
+    /// <summary>As <see cref="CardWithDcAndHum"/>, with the channel on the IQ centre.</summary>
+    CardWithDcAndHumAtCentre,
 }
 
 /// <summary>
@@ -139,6 +174,12 @@ internal enum CardArm
 /// IQ, so every arm meets the same noise in the channel's passband and the arms differ only in the
 /// receive path: the transport, the balance correction, the 16-bit card and the front end's filters
 /// and demodulator. Outside the channel the IQ is clean but for the image arm's interferer.</para>
+/// <para>The DC and hum arms add what a sound card's line input picks up on its own: a DC offset
+/// of 1 % of full scale on I and 0.7 % on Q (-40 and -43 dBFS), and mains hum at 50, 100 and
+/// 150 Hz at -50, -55 and -60 dBFS, the same on both channels, as pickup on a shared ground is.
+/// The wanted signal peaks at -40 dBFS, so the DC is as big as the burst and the 50 Hz hum is
+/// 10 dB under it: a card a little worse than a good one, chosen to show the cost rather than
+/// taken from a measured G90.</para>
 /// <para>Deterministic in (mode, SNR, arm, first seed, bursts).</para>
 /// </remarks>
 internal static class SoundCardIqBench
@@ -177,9 +218,16 @@ internal static class SoundCardIqBench
             return sim.Decode(audio, frame).Matched;
         }
 
+        bool atCentre = arm is CardArm.CardAtCentre or CardArm.CardWithDcAndHumAtCentre;
+        double dialOffset = atCentre ? 0 : DialOffsetHz;
         float[] wanted = Normalised(IqSynth.Resample(audio, sim.Rate, CardRate));
         var iq = new float[2 * wanted.Length];
-        CardSynth.AddSsb(iq, wanted, CardRate, DialOffsetHz, lsb: false, WantedAmplitude);
+        CardSynth.AddSsb(iq, wanted, CardRate, dialOffset, lsb: false, WantedAmplitude);
+        if (arm is CardArm.CardWithDcAndHum or CardArm.CardWithDcAndHumAtCentre)
+        {
+            CardSynth.AddDcAndHum(iq, CardRate, seed);
+        }
+
         bool image = arm == CardArm.CorrectedCardWithImage;
         if (image)
         {
@@ -208,7 +256,7 @@ internal static class SoundCardIqBench
             // leave the image arm's interferer room, and afsk1200's decoder hears a burst about
             // 2 dB worse at that level than at full scale (measured 2026-10-11: 15/50 against
             // 34/50 at +6 dB), which is a level matter for the operator's "gain", not the path.
-            [new IqChannelSpec { OffsetHz = DialOffsetHz, Demodulation = IqDemodulation.Usb, Gain = (float)(1 / WantedAmplitude) }],
+            [new IqChannelSpec { OffsetHz = dialOffset, Demodulation = IqDemodulation.Usb, Gain = (float)(1 / WantedAmplitude) }],
             new IqReceiverOptions { DspRate = sim.Rate });
         return sim.Decode(IqSynth.Receive(receiver)[0], frame).Matched;
     }

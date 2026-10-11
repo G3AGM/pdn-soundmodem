@@ -49,19 +49,28 @@ public sealed class SoundCardIqLadderTests(ITestOutputHelper output)
 
         const int bursts = 50;
         output.WriteLine($"{mode}, N={bursts}, seed 1, AWGN, USB 6 kHz above the centre of 48 kS/s IQ");
-        output.WriteLine("| SNR dB (3 kHz) | audio | matched card | 0.5 dB / 3 deg card, corrected, 34 dB signal on the image |");
-        output.WriteLine("|---:|---:|---:|---:|");
+        output.WriteLine("| SNR dB (3 kHz) | audio | matched card | 0.5 dB / 3 deg card, corrected, 34 dB signal on the image | DC and hum | channel on the centre | DC and hum, channel on the centre |");
+        output.WriteLine("|---:|---:|---:|---:|---:|---:|---:|");
         foreach (double snr in snrs)
         {
             int audio = SoundCardIqBench.RunPoint(mode, snr, CardArm.Audio, bursts);
             int card = SoundCardIqBench.RunPoint(mode, snr, CardArm.Card, bursts);
             int image = SoundCardIqBench.RunPoint(mode, snr, CardArm.CorrectedCardWithImage, bursts);
-            output.WriteLine($"| {snr:+0;-0} | {audio}/{bursts} | {card}/{bursts} | {image}/{bursts} |");
+            int hum = SoundCardIqBench.RunPoint(mode, snr, CardArm.CardWithDcAndHum, bursts);
+            int centre = SoundCardIqBench.RunPoint(mode, snr, CardArm.CardAtCentre, bursts);
+            int humCentre = SoundCardIqBench.RunPoint(mode, snr, CardArm.CardWithDcAndHumAtCentre, bursts);
+            output.WriteLine(
+                $"| {snr:+0;-0} | {audio}/{bursts} | {card}/{bursts} | {image}/{bursts} | {hum}/{bursts} "
+                + $"| {centre}/{bursts} | {humCentre}/{bursts} |");
 
             // Four binomial sigma at the worst (p = 0.5): a path that loses more than that against
             // the audio at any rung costs real sensitivity.
             card.Should().BeGreaterThanOrEqualTo(audio - 14, "the card must hear {0} about as well as the audio at {1} dB", mode, snr);
             image.Should().BeGreaterThanOrEqualTo(audio - 14, "the corrected card must keep the image out at {0} dB", snr);
+            hum.Should().BeGreaterThanOrEqualTo(
+                audio - 14, "at the default offset the card's DC and hum must stay out of the channel at {0} dB", snr);
+
+            // The two centre arms are measured, not held: they are what the default offset avoids.
         }
     }
 }

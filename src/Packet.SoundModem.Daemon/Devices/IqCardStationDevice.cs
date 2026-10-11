@@ -124,6 +124,12 @@ internal sealed class IqCardStationDevice(
             return "\"iqCard\".\"centreOffsetHz\" has to be a number of Hz";
         }
 
+        int cardRate = config.SampleRate ?? DefaultSampleRate;
+        if (config.ChannelOffsetHz is double channel && !(Math.Abs(channel) < cardRate / 2.0))
+        {
+            return $"\"iqCard\".\"channelOffsetHz\" ({channel}) has to be inside the {cardRate / 2} Hz either side of the centre the card carries";
+        }
+
         if (Options(config, 0).Problem() is string balance)
         {
             return $"\"iqCard\": {balance}";
@@ -173,18 +179,66 @@ internal sealed class IqCardStationDevice(
         };
     }
 
-    /// <summary>Whether the card's centre, and so its DC spike, falls inside the channel's audio.</summary>
-    internal static bool CentreInPassband(IqChannelSpec channel)
+    /// <summary>How close to the channel's audio, Hz, the card's centre may come before the
+    /// station warns: the DC offset itself, mains hum at 50 to 150 Hz either side of it, and room
+    /// for the hum's harmonics and the card's low-frequency noise.</summary>
+    internal const double CentreGuardHz = 1000;
+
+    /// <summary>
+    /// Whether the card's centre, and so its DC offset and hum, is inside the channel's audio or
+    /// within <see cref="CentreGuardHz"/> of it. A channel on the centre itself is: its SSB audio
+    /// starts 150 Hz above the DC, with the hum between.
+    /// </summary>
+    internal static bool CentreNearChannel(IqChannelSpec channel)
     {
-        // The centre is at -OffsetHz from the dial.
-        double centreFromDial = -channel.OffsetHz;
-        return channel.Demodulation switch
-        {
-            IqDemodulation.Usb => centreFromDial >= channel.SsbLowHz && centreFromDial <= channel.SsbHighHz,
-            IqDemodulation.Lsb => -centreFromDial >= channel.SsbLowHz && -centreFromDial <= channel.SsbHighHz,
-            _ => Math.Abs(centreFromDial) <= channel.FmIfBandwidthHz / 2,
-        };
+        // Where the centre is, in the channel's audio terms: Hz above the dial for USB, below it
+        // for LSB, from the carrier for FM.
+        double centre = channel.Demodulation == IqDemodulation.Lsb ? channel.OffsetHz : -channel.OffsetHz;
+        (double low, double high) = channel.Demodulation == IqDemodulation.Fm
+            ? (-channel.FmIfBandwidthHz / 2, channel.FmIfBandwidthHz / 2)
+            : (channel.SsbLowHz, channel.SsbHighHz);
+        double distance = centre < low ? low - centre : centre > high ? centre - high : 0;
+        return distance < CentreGuardHz;
     }
+
+    /// <summary>
+    /// Where the channel's dial sits from the card's centre, Hz, when the station puts the rig
+    /// there itself: <c>"channelOffsetHz"</c>, or by default an eighth of the card's rate
+    /// (<see cref="IqTuning.DcClearOffsetHz"/>, 6 kHz at 48 kHz), and for FM at least far enough
+    /// that the IF clears the centre by the guard.
+    /// </summary>
+    /// <remarks>
+    /// Why an eighth: at 48 kHz, 6 kHz puts USB audio at 6.15 to 9.45 kHz from the centre (LSB at
+    /// 2.55 to 5.85 kHz), clear of the DC offset, the 50/100/150 Hz hum and their low harmonics by
+    /// thousands of Hz, while the channel's filter out to its stopband (6 kHz either side of the
+    /// dial on a 12 kHz station) still ends at 12 kHz, half way to the 24 kHz the card carries,
+    /// so the card's own anti-alias roll-off near its band edge is not in the channel either.
+    /// </remarks>
+    internal static double ChannelOffsetHz(IqCardConfig? config, string sideband, int sampleRate)
+    {
+        if (config?.ChannelOffsetHz is double stated)
+        {
+            return stated;
+        }
+
+        double offset = IqTuning.DcClearOffsetHz(sampleRate);
+        if (RfPlan.IsFmRadio(sideband))
+        {
+            offset = Math.Max(offset, (new IqChannelSpec { OffsetHz = 0, Demodulation = IqDemodulation.Fm }.FmIfBandwidthHz / 2) + CentreGuardHz);
+        }
+
+        return offset;
+    }
+
+    /// <summary>
+    /// With the centre read off a rig (no <c>"centreFrequency"</c>), the rig goes
+    /// <see cref="ChannelOffsetHz"/> below the band plan's dial (less <c>"centreOffsetHz"</c>), so
+    /// the channel lands that far from the card's centre rather than on it.
+    /// </summary>
+    public override double RigDialOffsetHz(string sideband) =>
+        config?.CentreFrequency is not null
+            ? 0
+            : -(ChannelOffsetHz(config, sideband, SampleRate) + (config?.CentreOffsetHz ?? 0));
 
     /// <inheritdoc/>
     public override Task<DeviceOpening> OpenAsync(DeviceOpenContext context) => Task.FromResult(Open(context));
@@ -238,13 +292,16 @@ internal sealed class IqCardStationDevice(
         }
 
         IqChannelSpec spec = Channel(config, context.Sideband, dialHz - centreHz);
-        if (CentreInPassband(spec))
+        if (CentreNearChannel(spec))
         {
             journal.WriteError(
-                $"iqcard: the card's centre ({RfPlan.Mhz(centreHz)}) is inside the channel's audio, so "
-                + "the card's DC offset and hum will be heard there. Centre the IQ about "
-                + string.Create(CultureInfo.InvariantCulture, $"{IqTuning.DcClearOffsetHz(SampleRate) / 1000:F0} kHz")
-                + " below the dial instead.");
+                $"iqcard: the card's centre ({RfPlan.Mhz(centreHz)}) is "
+                + string.Create(CultureInfo.InvariantCulture, $"{spec.OffsetHz:+0;-0} Hz")
+                + " from the dial, in or beside the channel's audio, so the card's DC offset and hum "
+                + "will be heard there. Centre the IQ about "
+                + string.Create(CultureInfo.InvariantCulture, $"{ChannelOffsetHz(config, context.Sideband, SampleRate) / 1000:F1} kHz")
+                + " below the dial instead"
+                + (rig is null ? "." : ", or leave \"centreFrequency\" out and let the band plan put the rig there."));
         }
 
         // No mixer work: see the remarks. The capture opens here and nothing touches the card's
