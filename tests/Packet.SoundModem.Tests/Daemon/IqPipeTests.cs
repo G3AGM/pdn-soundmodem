@@ -143,6 +143,23 @@ public sealed class IqPipeTests : IDisposable
     }
 
     [Fact]
+    public void Restarting_The_Child_Leaks_No_Descriptors()
+    {
+        static int Open() => Directory.GetFiles("/proc/self/fd").Length;
+        using var source = Source(Command("head -c 200 /dev/zero"), IqSampleFormat.Cu8, rate: 48_000, maxYoungRuns: 30);
+        source.StartNow();
+        var buffer = new float[4096];
+        source.Read(buffer).Should().BeGreaterThan(0);
+        int before = Open();
+
+        ReadToEnd(source);
+
+        // Two pipes a run, 29 more runs: a leak would be dozens. Other tests' threads open and
+        // close their own, so a few either way is noise.
+        (Open() - before).Should().BeLessThan(10);
+    }
+
+    [Fact]
     public async Task A_Retune_Restarts_The_Command_At_The_New_Centre_And_Is_Reported_On_The_Next_Block()
     {
         using var source = Source(
@@ -196,7 +213,7 @@ public sealed class IqPipeTests : IDisposable
     [Fact]
     public async Task Disposing_Kills_The_Child_And_Ends_A_Blocked_Read()
     {
-        var source = Source(Command("exec sleep 600"), IqSampleFormat.Cu8, rate: 48_000, maxYoungRuns: 3);
+        using var source = Source(Command("exec sleep 600"), IqSampleFormat.Cu8, rate: 48_000, maxYoungRuns: 3);
         source.StartNow();
         Task<int> reading = Task.Run(() => source.Read(new float[64]));
         await Task.Delay(200);
@@ -265,6 +282,21 @@ public sealed class IqPipeTests : IDisposable
         source.SamplesLost.Should().Be(0);
         source.Read(buffer).Should().Be(2000);
         source.SamplesLost.Should().Be(18_000, "2 s at 10 kS/s, less the 0.1 s the feed was ahead and the 0.1 s the wait brought");
+    }
+
+    [Fact]
+    public void A_Feed_That_Pauses_And_Catches_Up_Is_Not_A_Gap()
+    {
+        var clock = new FakeTimeProvider();
+        var feed = new ScriptedFeed(clock);
+        // 0.1 s, then a 2 s pause, then the 2.1 s it owes in one go: far more than one read takes,
+        // the rest waiting in the pipe. Nothing was lost; it was late.
+        feed.Chunks.Enqueue((new byte[2 * 1000], TimeSpan.Zero));
+        feed.Chunks.Enqueue((new byte[2 * 21_000], TimeSpan.FromSeconds(2)));
+        using var source = Source(new ScriptedLauncher(feed), IqSampleFormat.Cu8, rate: 10_000, maxYoungRuns: 1, clock: clock);
+
+        ReadToEnd(source).Length.Should().Be(2 * 22_000);
+        source.SamplesLost.Should().Be(0, "what the pause left waiting in the pipe is not lost");
     }
 
     [Fact]
@@ -378,9 +410,9 @@ public sealed class IqPipeTests : IDisposable
     public async Task A_Stalled_Child_Raises_The_Dead_Feed_Alarm()
     {
         // Half a second of IQ, then the child stays alive and writes nothing: a wedged dongle.
-        var source = Source(Command("head -c 48000 /dev/zero; exec sleep 600"), IqSampleFormat.Cu8, rate: 48_000, maxYoungRuns: 3);
+        using var source = Source(Command("head -c 48000 /dev/zero; exec sleep 600"), IqSampleFormat.Cu8, rate: 48_000, maxYoungRuns: 3);
         source.StartNow();
-        var receiver = new IqReceiver(
+        using var receiver = new IqReceiver(
             source,
             [IqPipeStationDevice.ChannelFor("usb", 6_000, [], 1f)],
             new IqReceiverOptions { DspRate = 12_000 });
@@ -464,7 +496,7 @@ public sealed class IqPipeTests : IDisposable
     [Fact]
     public void A_Program_Line_Is_Made_Printable_Ascii()
     {
-        ChildProcessIqFeed.Printable("\u001b[1mFound\u001b[0m 1 device·s  \t")
+        ChildProcessIqFeed.Printable("\u001b[1mFound\u001b[0m 1 device\u00b7s  \t")
             .Should().Be("?[1mFound?[0m 1 device?s");
     }
 
@@ -664,6 +696,13 @@ public sealed class IqPipeTests : IDisposable
 
         public string EndReason => "the script ended";
 
+        /// <summary>What is left of the chunk being read: written, not yet read.</summary>
+        public int BytesWaiting => ((ChunkStream)Output).Left;
+
+        public void Stop()
+        {
+        }
+
         public void Dispose()
         {
         }
@@ -672,6 +711,8 @@ public sealed class IqPipeTests : IDisposable
         {
             private byte[]? _pending;
             private int _offset;
+
+            public int Left => _pending is null ? 0 : _pending.Length - _offset;
 
             public override bool CanRead => true;
 
@@ -730,6 +771,12 @@ public sealed class IqPipeTests : IDisposable
         public Stream Output => _stream;
 
         public string EndReason => "never";
+
+        public int BytesWaiting => 0;
+
+        public void Stop()
+        {
+        }
 
         public void Dispose()
         {

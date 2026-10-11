@@ -19,6 +19,59 @@ internal interface IIqFeed : IDisposable
     /// <summary>Why the run ended, in words for the journal, once <see cref="Output"/> has
     /// returned 0: a child's exit code and its last lines of standard error, say.</summary>
     string EndReason { get; }
+
+    /// <summary>Bytes already waiting in the pipe, readable without blocking, or 0 where that
+    /// cannot be asked. What tells a stall that lost samples from one that only delayed them.</summary>
+    int BytesWaiting { get; }
+
+    /// <summary>Ends the run from another thread: a blocked read of <see cref="Output"/> returns
+    /// 0 soon after. Quick, and safe to call more than once; <see cref="IDisposable.Dispose"/>
+    /// still releases the run afterwards.</summary>
+    void Stop();
+}
+
+/// <summary>Asking a pipe how much is waiting in it.</summary>
+internal static class PipeLevel
+{
+    private const int Fionread = 0x541B; // Linux, every architecture this daemon is built for.
+
+    /// <summary>The bytes readable now from <paramref name="handle"/>, or 0 if it cannot say.</summary>
+    public static int BytesWaiting(SafeHandle? handle)
+    {
+        if (handle is null || handle.IsInvalid || handle.IsClosed)
+        {
+            return 0;
+        }
+
+        bool added = false;
+        try
+        {
+            handle.DangerousAddRef(ref added);
+            return Ioctl((int)handle.DangerousGetHandle(), Fionread, out int waiting) == 0 ? Math.Max(0, waiting) : 0;
+        }
+        catch (ObjectDisposedException)
+        {
+            return 0;
+        }
+        finally
+        {
+            if (added)
+            {
+                handle.DangerousRelease();
+            }
+        }
+    }
+
+    /// <summary>The handle under a pipe or file stream, or null.</summary>
+    public static SafeHandle? HandleOf(Stream stream) => stream switch
+    {
+        System.IO.Pipes.PipeStream pipe => pipe.SafePipeHandle,
+        FileStream file => file.SafeFileHandle,
+        _ => null,
+    };
+
+    [DllImport("libc", EntryPoint = "ioctl", SetLastError = true)]
+    private static extern int Ioctl(int fd, int request, out int value);
 }
 
 /// <summary>What starts an <see cref="IIqFeed"/>, as many times as the source asks.</summary>
@@ -136,6 +189,7 @@ internal sealed class ChildProcessIqFeed : IIqFeed
     private readonly TimeProvider _time;
     private readonly Thread _stderr;
     private readonly Queue<string> _lastLines = new();
+    private readonly SafeHandle? _outputHandle;
     private int _disposed;
 
     public ChildProcessIqFeed(Process process, string program, Action<string> journal, TimeProvider timeProvider)
@@ -145,6 +199,7 @@ internal sealed class ChildProcessIqFeed : IIqFeed
         _journal = journal;
         _time = timeProvider;
         Output = process.StandardOutput.BaseStream;
+        _outputHandle = PipeLevel.HandleOf(Output);
         _stderr = new Thread(PumpStandardError) { IsBackground = true, Name = "iqpipe-stderr" };
         _stderr.Start();
     }
@@ -184,6 +239,14 @@ internal sealed class ChildProcessIqFeed : IIqFeed
     }
 
     /// <inheritdoc/>
+    public int BytesWaiting => Volatile.Read(ref _disposed) != 0 ? 0 : PipeLevel.BytesWaiting(_outputHandle);
+
+    /// <inheritdoc/>
+    /// <remarks>Kills the process tree and returns at once; its end is waited for in
+    /// <see cref="Dispose"/>, on the reader's thread.</remarks>
+    public void Stop() => Kill();
+
+    /// <inheritdoc/>
     public void Dispose()
     {
         if (Interlocked.Exchange(ref _disposed, 1) != 0)
@@ -193,6 +256,12 @@ internal sealed class ChildProcessIqFeed : IIqFeed
 
         Kill();
         _process.WaitForExit(TimeSpan.FromSeconds(2));
+
+        // Process.Dispose leaves redirected streams that were read for their owner to close, so
+        // close them here, or every restart leaks two descriptors until a finaliser runs.
+        Output.Dispose();
+        _stderr.Join(TimeSpan.FromSeconds(1));
+        _process.StandardError.Dispose();
         _process.Dispose();
     }
 
@@ -255,9 +324,10 @@ internal sealed class ChildProcessIqFeed : IIqFeed
                 quiet = 0;
             }
         }
-        catch (Exception e) when (e is IOException or ObjectDisposedException or InvalidOperationException)
+        catch (Exception)
         {
-            // The process is gone and its pipe with it.
+            // The process is gone and its pipe with it, or the pipe was closed under the read. On
+            // a thread of its own, so nothing here may escape: it would end the daemon.
         }
     }
 
@@ -296,7 +366,17 @@ internal sealed class FifoIqFeedLauncher(string path) : IIqFeedLauncher
     {
         // The open blocks until a writer comes. Whoever cancels wakes it by opening the far end
         // themselves (FifoIqFeed.Wake), which is the only thing that ends a FIFO open.
-        using CancellationTokenRegistration wake = cancellation.Register(() => FifoIqFeed.Wake(path));
+        // A wake that lands before this thread is in open finds no reader and does nothing, so
+        // it is tried again until the open has returned.
+        var opened = new ManualResetEventSlim();
+        using CancellationTokenRegistration wake = cancellation.Register(() => Task.Run(() =>
+        {
+            for (int k = 0; k < 40 && !opened.IsSet; k++)
+            {
+                FifoIqFeed.Wake(path);
+                opened.Wait(TimeSpan.FromMilliseconds(50));
+            }
+        }));
         cancellation.ThrowIfCancellationRequested();
         FileStream stream;
         try
@@ -306,6 +386,10 @@ internal sealed class FifoIqFeedLauncher(string path) : IIqFeedLauncher
         catch (UnauthorizedAccessException e)
         {
             throw new IOException($"{path}: {e.Message}", e);
+        }
+        finally
+        {
+            opened.Set();
         }
 
         return new FifoIqFeed(path, stream);
@@ -326,6 +410,22 @@ internal sealed class FifoIqFeed(string path, FileStream stream) : IIqFeed
     public string EndReason => $"the program writing to {path} closed it";
 
     /// <inheritdoc/>
+    public int BytesWaiting => Volatile.Read(ref _disposed) != 0 ? 0 : PipeLevel.BytesWaiting(stream.SafeFileHandle);
+
+    /// <inheritdoc/>
+    /// <remarks>A read blocked on a quiet writer is not ended by closing the descriptor under it,
+    /// so this writes to the FIFO: the read returns that byte, and the source, seeing it is
+    /// stopping, goes. Only on a stop: a run that ended at its writer's close is disposed without
+    /// it, so no stray byte lands at the head of the next writer's run.</remarks>
+    public void Stop()
+    {
+        if (Volatile.Read(ref _disposed) == 0)
+        {
+            Wake(path);
+        }
+    }
+
+    /// <inheritdoc/>
     public void Dispose()
     {
         if (Interlocked.Exchange(ref _disposed, 1) != 0)
@@ -333,9 +433,6 @@ internal sealed class FifoIqFeed(string path, FileStream stream) : IIqFeed
             return;
         }
 
-        // A read blocked on a quiet writer is not ended by closing the descriptor under it, so
-        // write to it: the read returns those bytes, and the source, seeing it is stopping, goes.
-        Wake(path);
         stream.Dispose();
     }
 
@@ -404,6 +501,14 @@ internal sealed class StandardInputIqFeedLauncher : IIqFeedLauncher
         public Stream Output => stream;
 
         public string EndReason => "standard input closed";
+
+        public int BytesWaiting => PipeLevel.BytesWaiting(PipeLevel.HandleOf(stream));
+
+        // A read of standard input cannot be ended from another thread; at shutdown the front
+        // end's two-second join is what it gets.
+        public void Stop()
+        {
+        }
 
         public void Dispose() => stream.Dispose();
     }

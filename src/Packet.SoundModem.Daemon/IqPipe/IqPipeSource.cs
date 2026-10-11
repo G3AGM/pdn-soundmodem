@@ -72,8 +72,10 @@ internal sealed record IqPipeSourceOptions
 /// far end dropped; it says what it can see. The time between one run's last samples and the
 /// next run's first is a gap of that length at the stated rate. Within a run, a read that waited
 /// longer than <see cref="IqPipeSourceOptions.StallGap"/> while the feed fell that far behind the
-/// wall clock is a gap of the shortfall (no more than the wait), which a feed that merely writes
-/// in bursts never is. Both are added to <see cref="SamplesLost"/> before the block that follows
+/// wall clock is a gap of the shortfall (no more than the wait). The shortfall counts what the
+/// stall left waiting in the pipe as delivered, so a writer that sends in bursts, or one that
+/// pauses and then catches up, is not a gap; one that catches up by more than the pipe holds
+/// (64 KiB on Linux) can still be counted short. Both are added to <see cref="SamplesLost"/> before the block that follows
 /// them, as the interface asks, and both are estimates from the clock rather than counts.</para>
 /// <para><b>Retunes.</b> <see cref="RetuneTo"/> restarts a feed whose command takes
 /// <c>{frequency}</c> at a new centre; the first block of the new run carries the new
@@ -102,6 +104,7 @@ internal sealed class IqPipeSource : IIqSource, IDisposable
     private readonly object _gate = new();
 
     private IIqFeed? _feed;
+    private CancellationTokenSource? _waitCancel;
     private double _feedCentreHz;
     private double? _pendingCentreHz;
     private bool _everStarted;
@@ -204,13 +207,25 @@ internal sealed class IqPipeSource : IIqSource, IDisposable
         }
 
         IIqFeed? running;
+        CancellationTokenSource? waiting;
         lock (_gate)
         {
             _pendingCentreHz = centreHz;
             running = _feed;
+            waiting = _waitCancel;
         }
 
-        running?.Dispose();
+        // Stopped, not disposed: the reader sees the run end and disposes it on its own thread,
+        // so the tuner's caller is not held while the old process is waited for.
+        running?.Stop();
+        try
+        {
+            waiting?.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+            // The wait has finished.
+        }
     }
 
     /// <inheritdoc/>
@@ -277,7 +292,12 @@ internal sealed class IqPipeSource : IIqSource, IDisposable
             }
 
             long now = _time.GetTimestamp();
-            Account(before, now, pairs);
+            // Asked only after a long wait: the backlog a stall left in the pipe is what tells a
+            // feed that lost samples from one that only delayed them.
+            long waitingPairs = _time.GetElapsedTime(before, now) >= _options.StallGap
+                ? feed.BytesWaiting / _perPair
+                : 0;
+            Account(before, now, pairs, waitingPairs);
 
             int used = pairs * _perPair;
             int values = IqSampleFormats.Convert(_options.Format, _bytes.AsSpan(0, used), interleaved);
@@ -307,13 +327,14 @@ internal sealed class IqPipeSource : IIqSource, IDisposable
             _feed = null;
         }
 
+        running?.Stop();
         running?.Dispose();
     }
 
     /// <summary>The bookkeeping for a block of <paramref name="pairs"/> that a read waiting from
     /// <paramref name="before"/> to <paramref name="now"/> returned: the gap or retune before it,
     /// and the rate watch.</summary>
-    private void Account(long before, long now, int pairs)
+    private void Account(long before, long now, int pairs, long waitingPairs)
     {
         if (_runFresh)
         {
@@ -343,10 +364,11 @@ internal sealed class IqPipeSource : IIqSource, IDisposable
             if (waited >= _options.StallGap)
             {
                 // How far short of the wall clock the run was when the read began (negative for a
-                // writer that buffers ahead), plus the wait, less what the wait brought.
+                // writer that buffers ahead), plus the wait, less what the wait brought: this
+                // block and whatever else is already waiting in the pipe behind it.
                 double expected = _time.GetElapsedTime(_runStart, before).TotalSeconds * _options.Rate;
                 long waitedPairs = (long)Math.Round(waited.TotalSeconds * _options.Rate);
-                long shortfall = (long)Math.Round(expected - _runPairs) + waitedPairs - pairs;
+                long shortfall = (long)Math.Round(expected - _runPairs) + waitedPairs - pairs - waitingPairs;
                 long gap = Math.Min(shortfall, waitedPairs);
                 if (gap >= (long)(_options.StallGap.TotalSeconds * _options.Rate / 2))
                 {
@@ -467,13 +489,35 @@ internal sealed class IqPipeSource : IIqSource, IDisposable
 
         if (wait)
         {
+            using var waitCancel = CancellationTokenSource.CreateLinkedTokenSource(_stopping.Token);
+            lock (_gate)
+            {
+                _waitCancel = waitCancel;
+                if (_pendingCentreHz is not null)
+                {
+                    // A retune arrived since the decision to wait: start it now.
+                    waitCancel.Cancel();
+                }
+            }
+
             try
             {
-                Task.Delay(_delay, _time, _stopping.Token).Wait(_stopping.Token);
+                Task.Delay(_delay, _time, waitCancel.Token).Wait(waitCancel.Token);
+            }
+            catch (OperationCanceledException) when (!_stopping.IsCancellationRequested)
+            {
+                // A retune cut the wait short.
             }
             catch (OperationCanceledException)
             {
                 return false;
+            }
+            finally
+            {
+                lock (_gate)
+                {
+                    _waitCancel = null;
+                }
             }
 
             _delay = TimeSpan.FromTicks(Math.Min(_delay.Ticks * 2, _options.MaxRestartDelay.Ticks));
@@ -543,7 +587,7 @@ internal sealed class IqPipeSource : IIqSource, IDisposable
         {
             // A retune came while this run was starting, and found nothing to end: end it now, so
             // the next read starts the run that was asked for.
-            feed.Dispose();
+            feed.Stop();
         }
 
         return true;
