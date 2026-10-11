@@ -1688,6 +1688,10 @@ public sealed class DaemonConfig
     /// other device.</summary>
     public IqCardConfig? IqCard { get; set; }
 
+    /// <summary>rtl_tcp settings (Device <c>rtltcp:</c>); null = defaults. Ignored for every
+    /// other device.</summary>
+    public RtlTcpConfig? RtlTcp { get; set; }
+
     /// <summary>Browser waterfall endpoint; null = disabled.</summary>
     public WaterfallConfig? Waterfall { get; set; }
 
@@ -2888,6 +2892,7 @@ public sealed class DaemonConfig
         Unknown("ubersdr", config.UberSdr?.UnknownSettings);
         Unknown("openwebrx", config.OpenWebRx?.UnknownSettings);
         Unknown("iqCard", config.IqCard?.UnknownSettings);
+        Unknown("rtltcp", config.RtlTcp?.UnknownSettings);
         Unknown("frameLog", config.FrameLog?.UnknownSettings);
         Unknown("survey", config.Survey?.UnknownSettings);
         Unknown("rawCapture", config.RawCapture?.UnknownSettings);
