@@ -45,6 +45,12 @@ internal sealed class Station : IDisposable
     private readonly StarvationWatch? _starvationWatch;
     private readonly ITimer? _starvationTimer;
     private readonly XrunWatch _xrunWatch = new();
+
+    // Audio the input lost, for the channel to pass on (SoundModemChannel.NoteReceiveAudioLost):
+    // the input's own loss counter as last read, and whether the input stalled (a Read that
+    // returned nothing) since the last block it delivered. Receive-loop thread only.
+    private long _inputLossSeen;
+    private bool _inputStalled;
     private readonly string _silenceMessage;
     private readonly string _starvationMessage;
 
@@ -115,6 +121,7 @@ internal sealed class Station : IDisposable
         (double silenceSeconds, double starvationSeconds) =
             DeadFeedConfig.Resolve(options.DeadFeed, options.DeviceKind);
         _deadFeedWatch = silenceSeconds > 0 ? new DeadFeedWatch(_inputRate, silenceSeconds) : null;
+        _inputLossSeen = options.InputLossCount?.Invoke() ?? 0;
         _silenceMessage = SilenceMessage(options.DeviceKind, silenceSeconds);
         _starvationMessage = StarvationMessage(options.DeviceKind, starvationSeconds);
 
@@ -205,6 +212,9 @@ internal sealed class Station : IDisposable
                 // Never a busy spin: every input that can return 0 has already waited inside Read
                 // (100 ms ubersdr, 200 ms flex; ALSA and wav-loop never return 0) - see the
                 // dead-feed notes on StationOptions.DeviceKind.
+                // Whatever the input should have delivered meanwhile is gone, so the next block it
+                // does deliver follows a hole.
+                _inputStalled = true;
                 continue;
             }
 
@@ -268,6 +278,22 @@ internal sealed class Station : IDisposable
             if (!keyedThisBlock)
             {
                 _options.CardRateTap?.Invoke(_inputBuffer.AsSpan(0, got));
+            }
+
+            // Lost audio is said before the block that follows it, so whoever hands the audio on
+            // marks exactly that block. Read every block: a counter read, nothing more.
+            bool inputLost = _inputStalled;
+            _inputStalled = false;
+            if (_options.InputLossCount is Func<long> inputLossCount)
+            {
+                long lossCount = inputLossCount();
+                inputLost |= lossCount != _inputLossSeen;
+                _inputLossSeen = lossCount;
+            }
+
+            if (inputLost)
+            {
+                _channel.NoteReceiveAudioLost();
             }
 
             if (_decimator is null)
@@ -543,6 +569,15 @@ internal sealed record StationOptions
     /// "the band is quiet" and "this machine will not schedule us".
     /// </summary>
     public Func<(int Capture, int Playback)>? XrunCounters { get; init; }
+
+    /// <summary>
+    /// A running count of the times the input lost audio (a sound card's capture overruns, a
+    /// radio's lost DAX packets), read once per block; whenever it moves, the channel is told
+    /// audio was lost before that block (<c>SoundModemChannel.NoteReceiveAudioLost</c>). Null for
+    /// a device that cannot say. An input that stalls (a <c>Read</c> that returns nothing) is
+    /// treated the same way without it.
+    /// </summary>
+    public Func<long>? InputLossCount { get; init; }
 
     /// <summary>
     /// Polled every ten seconds from the receive loop, in order, after the xrun counters; each

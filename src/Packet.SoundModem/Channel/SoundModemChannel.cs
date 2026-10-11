@@ -646,6 +646,7 @@ public sealed class SoundModemChannel
         _spectrum?.Process(samples);
         if (_transmitting)
         {
+            KeyedReceiveBlock?.Invoke(samples.Length);
             return;
         }
 
@@ -1125,6 +1126,48 @@ public sealed class SoundModemChannel
     /// inferring it from audio that has not arrived yet, or it simply stops for that gap.
     /// </remarks>
     public event Action<bool>? TransmittingChanged;
+
+    /// <summary>
+    /// Raised with the sample count of a receive block that arrived while the channel was
+    /// transmitting - the block <see cref="ProcessReceive"/> skipped its modems and its receive
+    /// taps for (half duplex).
+    /// </summary>
+    /// <remarks>
+    /// A tap sees nothing at all for the length of a keyup, which is fine for anything that only
+    /// cares about decoded signal, but a consumer whose own output has to carry a sample clock
+    /// that never stops - a stream another program reads as though it were a live sound card -
+    /// needs to know a keyup block was skipped, not silently miss it. This event is raised from
+    /// inside <see cref="ProcessReceive"/> at the exact point a block would otherwise be dropped
+    /// on the floor, with the length of that block, so such a consumer can emit a silent block
+    /// of the same length, marked as transmitted, in its place: the reader's clock keeps
+    /// advancing and knows which part of it was us rather than the band.
+    /// </remarks>
+    public event Action<int>? KeyedReceiveBlock;
+
+    /// <summary>
+    /// Raised by <see cref="NoteReceiveAudioLost"/>: the input lost audio before the next block
+    /// <see cref="ProcessReceive"/> is given.
+    /// </summary>
+    /// <remarks>
+    /// The channel itself does nothing with it; it is for a consumer that hands the receive
+    /// audio on as a continuous stream and has to tell its reader not to treat the two sides of
+    /// the hole as one signal. Raised on whatever thread called <see cref="NoteReceiveAudioLost"/>,
+    /// which is the receive thread, so a handler must return promptly and must not allocate.
+    /// </remarks>
+    public event Action? ReceiveAudioLost;
+
+    /// <summary>
+    /// Says that the input lost audio here: an overrun on a sound card, a packet the radio's
+    /// stream never delivered, an input that stalled and came back. The next block passed to
+    /// <see cref="ProcessReceive"/> is the first one after the hole.
+    /// </summary>
+    /// <remarks>
+    /// Only a flag, not a sample count: none of the inputs that can lose audio say how much they
+    /// lost. The host calls it on the receive thread, immediately before the
+    /// <see cref="ProcessReceive"/> of the block that follows the loss; the channel knows nothing
+    /// about which device lost what.
+    /// </remarks>
+    public void NoteReceiveAudioLost() => ReceiveAudioLost?.Invoke();
 
     /// <summary>
     /// A PTT keyup or unkey failed. Raised instead of letting the exception kill the

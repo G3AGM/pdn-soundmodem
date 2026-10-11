@@ -2914,6 +2914,14 @@ using var station = new Station(
             ? null
             : () => (alsaIn?.Xruns ?? 0, alsaOut?.Xruns ?? 0),
 
+        // What the channel audio stream marks as a gap (issue #584): a capture overrun on a sound
+        // card, a DAX packet the radio never delivered on a Flex.
+        InputLossCount = alsaIn is not null
+            ? () => alsaIn.Xruns
+            : flex?.Input is M0LTE.Flex.FlexAudioInput flexInput
+                ? () => flexInput.PacketsLost
+                : null,
+
         HealthChecks =
         [
             // A full disk left a station keeping an empty frame log for weeks with nothing anywhere

@@ -83,6 +83,53 @@ internal sealed class FlexStationDevice(DeviceKind kind, string spec, FlexDevice
     /// <summary>The <see cref="FlexRuntime"/> closes the DAX streams when it is disposed.</summary>
     public override bool ClosesItsOwnStreams => true;
 
+    /// <summary>
+    /// The local channel audio stream's band (issue #584) on this radio: a connection can ask for
+    /// a band to hear, and while it is asking, a headless slice's receive filter widens to cover
+    /// it - the same thing bring-up already does for the configured modems and the mailcast
+    /// signal, just live rather than once, and never touching the filter until a connection asks.
+    /// Put back to exactly what bring-up set the moment the last such connection goes.
+    /// </summary>
+    /// <remarks>
+    /// Headless only: in attach mode the slice and its filter are SmartSDR's, and nothing is
+    /// installed. And only with a filter bring-up read back; without one (the receive filter
+    /// warning at bring-up said why) there is nothing known to widen from or put back to, and
+    /// guessing is worse than leaving it.
+    /// </remarks>
+    /// <returns>What now answers the stream's band, or null where nothing does.</returns>
+    internal static FlexStreamFilter? StreamFilterFor(
+        FlexDevice.FlexSpec flexSpec,
+        M0LTE.Flex.FlexStation station,
+        (int LowHz, int HighHz)? baseline,
+        WaterfallWebServer waterfallServer,
+        CancellationToken cancellation)
+    {
+        if (!flexSpec.Headless || baseline is not (int baseLowHz, int baseHighHz))
+        {
+            return null;
+        }
+
+        // The slice and the session are read when a command goes, so a rebuilt slice is followed.
+        var streamFilter = new FlexStreamFilter(
+            (baseLowHz, baseHighHz),
+            () => station.SliceIndex,
+            command => station.Client.SendCommandExpectOkAsync(command, cancellation),
+            Console.WriteLine,
+            Console.Error.WriteLine);
+
+        // A rebuilt slice comes up on bring-up's filter; a standing widening goes back on it.
+        station.HealthChanged += report =>
+        {
+            if (report.Health == M0LTE.Flex.FlexStationHealth.Healthy)
+            {
+                streamFilter.SliceRebuilt();
+            }
+        };
+
+        waterfallServer.ReceiveBandRequested = streamFilter.Request;
+        return streamFilter;
+    }
+
     /// <inheritdoc/>
     public override async Task<DeviceOpening> OpenAsync(DeviceOpenContext context)
     {
@@ -353,6 +400,11 @@ internal sealed class FlexStationDevice(DeviceKind kind, string spec, FlexDevice
             // The radio's ceiling on receive width is not measured, so this is how a radio that will
             // not go as wide as asked says so, rather than the modem quietly going deaf.
             Console.Error.WriteLine($"flex: WARNING - {receiveFilterWarning}");
+        }
+
+        if (waterfallServer is not null)
+        {
+            StreamFilterFor(flexSpec, flex.Station, flex.Station.ReceiveFilter, waterfallServer, context.Cancellation);
         }
 
         return new DeviceOpening

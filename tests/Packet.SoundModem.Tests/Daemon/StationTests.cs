@@ -544,6 +544,115 @@ public class StationTests : IDisposable
         return modulator.Modulate(Frame(from), txDelayMilliseconds: 100);
     }
 
+    /// <summary>An input that follows a script, one entry per <c>Read</c>: deliver a block whose
+    /// samples all carry the read's number, or deliver nothing; and a loss counter the test
+    /// moves, as a sound card's overrun count or a radio's lost-packet count moves.</summary>
+    private sealed class ScriptedInput(int sampleRate, bool[] delivers) : IAudioInput
+    {
+        private int _reads;
+        private long _lost;
+
+        public int SampleRate { get; } = sampleRate;
+
+        public int Reads => Volatile.Read(ref _reads);
+
+        public long Lost => Volatile.Read(ref _lost);
+
+        /// <summary>The read on which the loss counter moves, or -1 for never.</summary>
+        public int LoseOnRead { get; init; } = -1;
+
+        public int Read(Span<float> buffer)
+        {
+            int read = Interlocked.Increment(ref _reads) - 1;
+            Thread.Sleep(1);
+            if (read == LoseOnRead)
+            {
+                Interlocked.Increment(ref _lost);
+            }
+
+            if (read >= delivers.Length || !delivers[read])
+            {
+                return 0;
+            }
+
+            buffer.Fill(read + 1);
+            return buffer.Length;
+        }
+    }
+
+    /// <summary>Runs a scripted input through a station and returns what the channel saw, in
+    /// order: "lost" for each loss it was told of, and the read number of each block.</summary>
+    private async Task<List<string>> ChannelSequenceAsync(ScriptedInput input, int reads)
+    {
+        var channel = new SoundModemChannel(12000);
+        var seen = new List<string>();
+        channel.ReceiveAudioLost += () => { lock (seen) { seen.Add("lost"); } };
+        channel.AddReceiveTap(samples => { lock (seen) { seen.Add(((int)samples[0]).ToString(System.Globalization.CultureInfo.InvariantCulture)); } });
+        using var stopping = new CancellationTokenSource();
+        using var station = new DaemonStation(
+            UberSdrOptions(input, Journal()) with
+            {
+                Channel = channel,
+                InputLossCount = () => input.Lost,
+            },
+            stopping.Token);
+
+        Task running = RunAsync(station);
+        await UntilAsync(() => input.Reads >= reads, "the loop has read the whole script");
+        await stopping.CancelAsync();
+        await running.WaitAsync(TimeSpan.FromSeconds(5));
+        lock (seen)
+        {
+            return [.. seen];
+        }
+    }
+
+    [Fact]
+    public async Task Audio_The_Input_Says_It_Lost_Is_Told_To_The_Channel_Before_The_Next_Block()
+    {
+        var input = new ScriptedInput(12000, [true, true, true, true]) { LoseOnRead = 2 };
+
+        List<string> seen = await ChannelSequenceAsync(input, 4);
+
+        seen.Should().StartWith(["1", "2", "lost", "3", "4"],
+            "the overrun happened during the third read, so the third block follows the hole");
+        seen.Count(s => s == "lost").Should().Be(1);
+    }
+
+    [Fact]
+    public async Task An_Input_That_Stalled_And_Came_Back_Is_Told_To_The_Channel_Once()
+    {
+        // Two reads with nothing (a Flex or a web receiver that stopped delivering), then audio.
+        var input = new ScriptedInput(12000, [true, false, false, true, true]);
+
+        List<string> seen = await ChannelSequenceAsync(input, 5);
+
+        seen.Should().StartWith(["1", "lost", "4", "5"],
+            "whatever the input should have delivered while it was stalled is gone");
+        seen.Count(s => s == "lost").Should().Be(1, "one hole, however many empty reads it took");
+    }
+
+    [Fact]
+    public async Task A_Loss_Counter_That_Was_Already_Running_At_Start_Up_Is_Not_A_Loss()
+    {
+        var input = new ScriptedInput(12000, [true, true, true]);
+        const long already = 7;
+        var channel = new SoundModemChannel(12000);
+        int losses = 0;
+        channel.ReceiveAudioLost += () => Interlocked.Increment(ref losses);
+        using var stopping = new CancellationTokenSource();
+        using var station = new DaemonStation(
+            UberSdrOptions(input, Journal()) with { Channel = channel, InputLossCount = () => already },
+            stopping.Token);
+
+        Task running = RunAsync(station);
+        await UntilAsync(() => input.Reads >= 3, "the loop has read the script");
+        await stopping.CancelAsync();
+        await running.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Volatile.Read(ref losses).Should().Be(0, "overruns from before the station started are not this stream's");
+    }
+
     /// <summary>An AX.25 UI frame, so the log has a real callsign to file the row under.</summary>
     private static byte[] Frame(string from) =>
         Packet.SoundModem.Waterfall.Ax25UiFrame.Build(from, "GB7RDG", new byte[8]);

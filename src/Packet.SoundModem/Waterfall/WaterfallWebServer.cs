@@ -385,6 +385,10 @@ public sealed class WaterfallWebServer : IAsyncDisposable
     private readonly SoundModemChannel _channel;
     private readonly WaterfallOptions _options;
 
+    /// <summary>The local channel audio stream (issue #584), served at
+    /// <see cref="ChannelAudioStream.Path"/>.</summary>
+    private readonly ChannelAudioStream _channelAudioStream;
+
     // Null on a server that a router serves (see Routed): the front door owns the port, which is
     // the thing that actually has to be single, and fifty receivers under one hostname must not
     // mean fifty listeners. A station that is its own site keeps its own listener, as it always
@@ -641,6 +645,7 @@ public sealed class WaterfallWebServer : IAsyncDisposable
         _levelMeter = _options.InputLevelMeter
             ? new Audio.InputLevelMeter(_options.TimeProvider)
             : null;
+        _channelAudioStream = new ChannelAudioStream(channel.SampleRate, line => Journal(line));
         Url = "";
     }
 
@@ -897,6 +902,21 @@ public sealed class WaterfallWebServer : IAsyncDisposable
     public Func<HttpListenerContext, string, Task<bool>>? ApiHandler { get; set; }
 
     /// <summary>
+    /// Called with the union of every channel-audio-stream client's requested band (issue #584)
+    /// whenever it changes; null once no connected client has asked for one. Only the caller
+    /// knows what a requested band should do, such as widening a headless Flex's slice filter
+    /// while it is asked for and putting it back once it is not; this server knows nothing about
+    /// Flex. Setting it while a band is already asked for (a program that connected before the
+    /// device opened) calls it at once with that band. Called in order, under the stream's own
+    /// lock, so it must return promptly and leave anything slow to its own thread.
+    /// </summary>
+    public Action<(int LowHz, int HighHz)?>? ReceiveBandRequested
+    {
+        get => _channelAudioStream.BandRequested;
+        set => _channelAudioStream.BandRequested = value;
+    }
+
+    /// <summary>
     /// What this station has heard, served at <c>/metrics</c> (Prometheus text) and
     /// <c>/metrics/frames</c> (InfluxDB line protocol, one point per frame). Null serves
     /// neither, which is the default: a station publishes what it hears only when asked to.
@@ -1031,6 +1051,17 @@ public sealed class WaterfallWebServer : IAsyncDisposable
         _bands.Sort((a, b) => a.SubChannel.CompareTo(b.SubChannel));
 
         _configMessage = BuildConfigMessage();
+
+        // The local channel audio stream (issue #584): always registered, costing a no-op
+        // length check on the receive thread when nobody has connected to it, so existing
+        // stations see no change at all unless a program asks. Fed both halves of the channel's
+        // receive audio: the taps everyone else gets, and the blocks skipped for a keyup, which
+        // this stream alone turns into explicitly-marked silence rather than simply losing them;
+        // and told when the input lost audio, so its readers can be told too.
+        _channel.AddReceiveTap(_channelAudioStream.OnReceive);
+        _channel.KeyedReceiveBlock += _channelAudioStream.OnKeyedBlock;
+        _channel.ReceiveAudioLost += _channelAudioStream.OnInputLost;
+
         _channel.AddReceiveTap(samples =>
         {
             // Not while our own transmission is still being painted. The two are separate audio
@@ -2818,6 +2849,28 @@ public sealed class WaterfallWebServer : IAsyncDisposable
 
         try
         {
+            // The local channel audio stream (issue #584). Checked by its own path, ahead of the
+            // page's own WebSocket below, which otherwise upgrades anything: this one is for a
+            // program on the same machine, never a browser, so it is refused rather than served
+            // the moment the local-program check fails. No key: loopback, no Origin and no proxy
+            // in between is the whole of its authentication.
+            if (requestPath == ChannelAudioStream.Path && context.Request.IsWebSocketRequest)
+            {
+                if (await RefusedUnlessLocalProgramAsync(context, "channel-audio", "the channel audio stream")
+                        .ConfigureAwait(false))
+                {
+                    return true;
+                }
+
+                string remoteDescription = context.Request.RemoteEndPoint?.ToString() ?? "a client";
+                HttpListenerWebSocketContext streamUpgrade =
+                    await context.AcceptWebSocketAsync(null).ConfigureAwait(false);
+                await _channelAudioStream.ServeAsync(
+                        streamUpgrade.WebSocket, remoteDescription, _options.DialFrequencyHz, _stopping.Token)
+                    .ConfigureAwait(false);
+                return true;
+            }
+
             if (context.Request.IsWebSocketRequest)
             {
                 // Where this page says it came from, and where it reached us. Recorded now and
@@ -3245,6 +3298,34 @@ public sealed class WaterfallWebServer : IAsyncDisposable
     /// the line and nothing else - this is called from a finally, where an exception would take
     /// the tidying up with it.
     /// </summary>
+    /// <summary>
+    /// Refuses, with a plain 403 and one journal line, a request for something meant only for a
+    /// program on this machine (see <see cref="ChannelAudioStream.LocalProgramRefusal"/>), and
+    /// says whether it did. The one check every such endpoint uses, so they cannot drift apart.
+    /// </summary>
+    /// <param name="context">The request.</param>
+    /// <param name="journalTag">The journal line's prefix, e.g. <c>channel-audio</c>.</param>
+    /// <param name="what">What was asked for, in the refusal's own words.</param>
+    /// <returns>True when the request was refused and answered.</returns>
+    internal async Task<bool> RefusedUnlessLocalProgramAsync(HttpListenerContext context, string journalTag, string what)
+    {
+        string? refusal = ChannelAudioStream.LocalProgramRefusal(
+            context.Request.RemoteEndPoint?.Address, context.Request.Headers);
+        if (refusal is null)
+        {
+            return false;
+        }
+
+        Journal($"{journalTag}: refused {context.Request.RemoteEndPoint} - {refusal}");
+        context.Response.StatusCode = 403;
+        context.Response.ContentType = "text/plain; charset=utf-8";
+        byte[] reason = System.Text.Encoding.UTF8.GetBytes($"{what} is for a program on this machine only");
+        context.Response.ContentLength64 = reason.Length;
+        await context.Response.OutputStream.WriteAsync(reason).ConfigureAwait(false);
+        context.Response.Close();
+        return true;
+    }
+
     private void Journal(string line)
     {
         try
@@ -3499,6 +3580,9 @@ public sealed class WaterfallWebServer : IAsyncDisposable
         _channel.FrameTransmittedWithReport -= OnFrameTransmitted;
         _channel.TransmittedAudio -= OnTransmittedAudio;
         _channel.TransmittingChanged -= OnTransmittingChanged;
+        _channel.KeyedReceiveBlock -= _channelAudioStream.OnKeyedBlock;
+        _channel.ReceiveAudioLost -= _channelAudioStream.OnInputLost;
+        _channelAudioStream.Shutdown();
         _linkExpiry?.Dispose();
         _linkExpiry = null;
         _keepAlive?.Dispose();
