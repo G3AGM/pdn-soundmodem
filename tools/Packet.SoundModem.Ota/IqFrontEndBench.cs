@@ -168,8 +168,13 @@ internal static class IqFrontEndBench
 
     /// <summary>Scores <paramref name="bursts"/> bursts of <paramref name="mode"/> at
     /// <paramref name="cnrDb"/> through <paramref name="arm"/>; returns the frames recovered.</summary>
+    /// <param name="frontEndIfHz">The front end's IF, Hz, or null for what
+    /// <see cref="IqChannelSpec.ForFmMode"/> gives (the mode's published occupancy). The CNR and the
+    /// reference's pre-filter stay at the channel spacing's IF either way, as the link model states
+    /// them.</param>
     public static int RunPoint(
-        string mode, double cnrDb, IqFmArm arm, int bursts, int sourceRate, int firstSeed = 1, int workers = 4)
+        string mode, double cnrDb, IqFmArm arm, int bursts, int sourceRate, int firstSeed = 1, int workers = 4,
+        double? frontEndIfHz = null)
     {
         FmModeProfile profile = FmModeProfiles.For(mode)
             ?? throw new ArgumentException($"'{mode}' is not an FM mode", nameof(mode));
@@ -179,13 +184,14 @@ internal static class IqFrontEndBench
         Parallel.For(
             0, bursts, new ParallelOptions { MaxDegreeOfParallelism = Math.Max(1, workers) },
             () => 0,
-            (b, _, local) => local + (RunBurst(mode, cnrDb, arm, sourceRate, deviation, ifBandwidth, firstSeed + b) ? 1 : 0),
+            (b, _, local) => local + (RunBurst(mode, cnrDb, arm, sourceRate, deviation, ifBandwidth, frontEndIfHz, firstSeed + b) ? 1 : 0),
             local => Interlocked.Add(ref successes, local));
         return successes;
     }
 
     private static bool RunBurst(
-        string mode, double cnrDb, IqFmArm arm, int sourceRate, double deviation, double ifBandwidth, int seed)
+        string mode, double cnrDb, IqFmArm arm, int sourceRate, double deviation, double ifBandwidth,
+        double? frontEndIfHz, int seed)
     {
         var sim = new SimModem(mode);
         byte[] frame = SimModem.Frame(60, seed);
@@ -236,7 +242,11 @@ internal static class IqFrontEndBench
         }
         else
         {
-            var spec = IqChannelSpec.ForFmMode(mode, OffsetHz);
+            IqChannelSpec spec = IqChannelSpec.ForFmMode(mode, OffsetHz);
+            if (frontEndIfHz is double frontEndIf)
+            {
+                spec = spec with { FmIfBandwidthHz = frontEndIf };
+            }
             using var receiver = new IqReceiver(
                 new BufferIqSource(iq, sourceRate),
                 [spec],

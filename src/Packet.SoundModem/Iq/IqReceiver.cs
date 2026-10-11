@@ -62,7 +62,7 @@ public sealed record IqReceiverOptions
 /// <para><b>Why the coarse stage comes first.</b> A channel filter run at the source rate is
 /// what an existing <see cref="DigitalDownconverter"/> does, and at 2.4 MS/s that is about 300 M
 /// multiply-accumulates a second for each channel. Halving first, where only a narrow band about
-/// DC has to survive, costs about twenty per input sample for the whole source, and the
+/// DC has to survive, costs about ten per input sample for the whole source (2.4 MS/s to 150 kS/s in four stages), and the
 /// per-channel work then runs at tens of kS/s.</para>
 /// <para><b>Retunes and gaps</b> are the source's to report (the two counters on
 /// <see cref="IIqSource"/>) and this class's to act on. A retune (the generation moving) restarts
@@ -104,6 +104,15 @@ public sealed class IqReceiver : IDisposable
     private DateTimeOffset _nextGapLine = DateTimeOffset.MinValue;
     private long _quietGaps;
     private long _quietLost;
+
+    // Retune lines: rate-limited as the gap lines are.
+    private DateTimeOffset _nextRetuneLine = DateTimeOffset.MinValue;
+    private long _quietRetunes;
+
+    // Read from other threads; 64-bit, so Interlocked to keep a 32-bit Pi from tearing them.
+    private long _retunes;
+    private long _gaps;
+    private long _samplesLost;
 
     /// <summary>Builds the front end for <paramref name="source"/>, with a channel for each spec.</summary>
     /// <exception cref="ArgumentException">A channel cannot run as specified, or lies outside the
@@ -181,13 +190,13 @@ public sealed class IqReceiver : IDisposable
     public CoarseDecimator Coarse => _coarse;
 
     /// <summary>Retunes seen (the source's generation moving), since construction.</summary>
-    public long Retunes { get; private set; }
+    public long Retunes => Interlocked.Read(ref _retunes);
 
     /// <summary>Gaps seen (the source's loss counter moving), since construction.</summary>
-    public long Gaps { get; private set; }
+    public long Gaps => Interlocked.Read(ref _gaps);
 
     /// <summary>Complex samples the source said it lost, since construction.</summary>
-    public long SamplesLost { get; private set; }
+    public long SamplesLost => Interlocked.Read(ref _samplesLost);
 
     /// <summary>Starts the reader thread, which pumps until the source closes or this is disposed.</summary>
     public void Start()
@@ -323,7 +332,7 @@ public sealed class IqReceiver : IDisposable
     /// <summary>The block just read is the first at a new tuning.</summary>
     private void Retune()
     {
-        Retunes++;
+        Interlocked.Increment(ref _retunes);
         int rate = _source.SampleRate;
         double centre = _source.CentreFrequencyHz;
         bool rateMoved = rate != _rate;
@@ -344,7 +353,21 @@ public sealed class IqReceiver : IDisposable
 
         _centreHz = centre;
         string where = centre != 0 ? $"{centre / 1e6:F6} MHz" : "an unknown frequency";
-        _options.Journal?.Invoke($"iq: the source retuned to {where} at {rate} S/s; every channel's filters restarted");
+        if (_options.Journal is Action<string> journal)
+        {
+            DateTimeOffset now = _options.TimeProvider.GetUtcNow();
+            if (now < _nextRetuneLine)
+            {
+                _quietRetunes++;
+            }
+            else
+            {
+                _nextRetuneLine = now + GapLineInterval;
+                string more = _quietRetunes > 0 ? $" ({_quietRetunes} more retune(s) since the last line)" : "";
+                journal($"iq: the source retuned to {where} at {rate} S/s; every channel's filters restarted{more}");
+                _quietRetunes = 0;
+            }
+        }
         foreach (IqReceiverChannel channel in _channels)
         {
             // Counted before the audio that marks it, so the station's loss counter moves with the
@@ -358,8 +381,8 @@ public sealed class IqReceiver : IDisposable
     /// immediately before the block just read.</summary>
     private void MarkGap(long missing, int rate, bool alreadyRestarted)
     {
-        Gaps++;
-        SamplesLost += missing;
+        Interlocked.Increment(ref _gaps);
+        Interlocked.Add(ref _samplesLost, missing);
         if (!alreadyRestarted)
         {
             _coarse.Reset();

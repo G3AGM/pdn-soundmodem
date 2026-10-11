@@ -149,6 +149,59 @@ public sealed class IqReceiverTests
         journal.Should().ContainSingle(l => l.Contains("lost 60000 samples") && l.Contains("not spliced"));
     }
 
+    [Theory]
+    [InlineData(IqDemodulation.Usb)]
+    [InlineData(IqDemodulation.Fm)]
+    public void A_Gap_And_A_Retune_In_The_Same_Block_Keep_Time_And_Count_Once(IqDemodulation demodulation)
+    {
+        // A source that changes rate and loses a quarter of a second at the same moment: the loss
+        // is measured at the old rate (60000 samples at 240 kS/s), and the audio is one second,
+        // a quarter of silence, then one second, with the silence exactly where the first ended.
+        const int dsp = 12_000;
+        var source = new ScriptedIqSource(
+        [
+            new(ComplexTone(240_000, 26_000, 240_000, 0.5f), 240_000),
+            new(ComplexTone(192_000, 26_000, 192_000, 0.5f), 192_000, LostBefore: 60_000),
+        ]);
+        using var receiver = new IqReceiver(
+            source,
+            [new IqChannelSpec { OffsetHz = 25_000, Demodulation = demodulation, FmIfBandwidthHz = 8_000 }],
+            new IqReceiverOptions { DspRate = dsp });
+
+        float[] audio = IqSynth.Receive(receiver)[0];
+
+        audio.Length.Should().Be(27_000);
+        (int start, int length) = LongestZeroRun(audio);
+        start.Should().Be(12_000);
+        length.Should().BeInRange(3_000, 3_001, "the FM discriminator's first output after a restart is taken against silence");
+        receiver.Retunes.Should().Be(1);
+        receiver.Gaps.Should().Be(1);
+        receiver.Channels[0].Discontinuities.Should().Be(1, "one block, one discontinuity");
+    }
+
+    [Fact]
+    public void Retune_Lines_Are_Rate_Limited_Like_Gap_Lines()
+    {
+        const int rate = 48_000;
+        var segments = new List<ScriptedIqSource.Segment>();
+        for (int k = 0; k < 6; k++)
+        {
+            segments.Add(new(ComplexTone(rate, 6_000, 4_800, 0.5f), rate, Rf + (k * 1_000)));
+        }
+
+        var journal = new List<string>();
+        var time = new Microsoft.Extensions.Time.Testing.FakeTimeProvider();
+        using var receiver = new IqReceiver(
+            new ScriptedIqSource(segments),
+            [new IqChannelSpec { OffsetHz = 5_000, Demodulation = IqDemodulation.Usb }],
+            new IqReceiverOptions { DspRate = 12_000, Journal = journal.Add, TimeProvider = time, CoverageHz = 15_000 });
+
+        receiver.PumpToEnd();
+
+        receiver.Retunes.Should().Be(5);
+        journal.Count(l => l.Contains("retuned")).Should().Be(1, "the rest fall inside the ten seconds");
+    }
+
     [Fact]
     public void A_Gap_Longer_Than_The_Cap_Is_Marked_At_The_Cap()
     {

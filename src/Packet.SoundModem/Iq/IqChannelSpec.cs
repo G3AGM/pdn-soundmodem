@@ -80,7 +80,8 @@ public sealed record IqChannelSpec
 
     /// <summary>
     /// The FM channel for a catalogue mode: its recommended deviation (or its target where there
-    /// is no recommendation), and the IF of the channel spacing it is deployed on.
+    /// is no recommendation), and an IF as wide as the mode's published occupied bandwidth (10 kHz
+    /// for afsk1200, 20 kHz for fsk9600), or the IF of its channel spacing where it has none.
     /// </summary>
     /// <param name="mode">The mode, e.g. <c>fsk9600-il2p</c>.</param>
     /// <param name="offsetHz">The channel's offset from the source's centre, Hz.</param>
@@ -95,7 +96,9 @@ public sealed record IqChannelSpec
             Demodulation = IqDemodulation.Fm,
             Name = mode,
             FmDeviationHz = profile.PeakDeviationHz,
-            FmIfBandwidthHz = IfBandwidthForSpacing(profile.ChannelSpacingHz),
+            // As wide as the mode says it occupies, so the IF does not trim the signal's own
+            // sidebands; the spacing's IF where the mode publishes no occupancy.
+            FmIfBandwidthHz = profile.OccupiedBandwidthHz ?? IfBandwidthForSpacing(profile.ChannelSpacingHz),
         };
     }
 

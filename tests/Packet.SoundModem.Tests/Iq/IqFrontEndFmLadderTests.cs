@@ -1,3 +1,4 @@
+using Packet.SoundModem.Iq;
 using Packet.SoundModem.Ota;
 
 namespace Packet.SoundModem.Tests.Iq;
@@ -54,13 +55,18 @@ public sealed class IqFrontEndFmLadderTests(ITestOutputHelper output)
 
         const int bursts = 50;
         output.WriteLine($"{mode}, N={bursts}, seed 1, front end at 2.4 MS/s with the carrier 25 kHz off centre");
-        output.WriteLine("| CNR dB | reference | front end |");
-        output.WriteLine("|---:|---:|---:|");
+        double spacingIf = IqChannelSpec.IfBandwidthForSpacing(
+            Packet.SoundModem.Modems.FmModeProfiles.For(mode)!.ChannelSpacingHz);
+        double occupancyIf = IqChannelSpec.ForFmMode(mode, 0).FmIfBandwidthHz;
+        output.WriteLine($"| CNR dB | reference ({spacingIf / 1000:F0} kHz IF) | front end ({occupancyIf / 1000:F0} kHz IF) | front end ({spacingIf / 1000:F0} kHz IF) |");
+        output.WriteLine("|---:|---:|---:|---:|");
         foreach (double cnr in cnrs)
         {
             int reference = IqFrontEndBench.RunPoint(mode, cnr, IqFmArm.Reference, bursts, sourceRate: 48_000);
             int frontEnd = IqFrontEndBench.RunPoint(mode, cnr, IqFmArm.FrontEnd, bursts, sourceRate: 2_400_000);
-            output.WriteLine($"| {cnr:+0;-0} | {reference}/{bursts} | {frontEnd}/{bursts} |");
+            int narrow = IqFrontEndBench.RunPoint(
+                mode, cnr, IqFmArm.FrontEnd, bursts, sourceRate: 2_400_000, frontEndIfHz: spacingIf);
+            output.WriteLine($"| {cnr:+0;-0} | {reference}/{bursts} | {frontEnd}/{bursts} | {narrow}/{bursts} |");
 
             // Four binomial sigma at the worst (p = 0.5): a front end that loses more than that
             // against the reference at any rung costs real sensitivity.

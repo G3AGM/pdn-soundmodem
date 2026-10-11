@@ -238,7 +238,7 @@ public sealed class HalfbandDecimator
 /// It halves while the rate allows (an even rate) and while the halved rate still leaves the
 /// protected band a stopband of at least its own width (output rate at least three times the
 /// protected half-width), so the last stage stays short. A 2.4 MS/s dongle with a channel 25 kHz
-/// off centre comes down to 150 kS/s in four stages for about twenty multiply-accumulates per
+/// off centre comes down to 150 kS/s in four stages for about ten multiply-accumulates per
 /// input sample in all; a 48 kS/s sound card, already narrow, passes through untouched.
 /// </remarks>
 public sealed class CoarseDecimator
