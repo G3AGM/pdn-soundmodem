@@ -187,6 +187,7 @@ PagingConfig? paging = null;
 FlexConfig? flexConfig = null;
 UberSdrConfig? uberSdrConfig = null;
 OpenWebRxConfig? openWebRxConfig = null;
+IqCardConfig? iqCardConfig = null;
 WaterfallConfig? waterfallConfig = null;
 PublishConfig? publishConfig = null;
 SurveyConfig? surveyConfig = null;
@@ -258,6 +259,7 @@ if (configPath is not null)
     flexConfig = config.Flex;
     uberSdrConfig = config.UberSdr;
     openWebRxConfig = config.OpenWebRx;
+    iqCardConfig = config.IqCard;
     waterfallConfig = config.Waterfall;
     publishConfig = config.Publish;
     apiConfig = config.Api;
@@ -557,7 +559,7 @@ try
 {
     stationDevice = DeviceKinds.Resolve(
         device, wavLoopPath,
-        new DeviceSettings(uberSdrConfig, HasWaterfall: waterfallConfig is not null, openWebRxConfig));
+        new DeviceSettings(uberSdrConfig, HasWaterfall: waterfallConfig is not null, openWebRxConfig, iqCardConfig));
 }
 catch (InvalidDataException malformed)
 {
@@ -2407,7 +2409,7 @@ if (rigConfig is not null)
     RigTuning? rigPlan = bandPlan is null
         ? null
         : new RigTuning(
-            (long)Math.Round(bandPlan.DialHz),
+            (long)Math.Round(bandPlan.DialHz + stationDevice.RigDialOffsetHz(bandPlan.Sideband)),
             rigConfig.Mode?.ToUpperInvariant() ?? RigModes.ForSideband(bandPlan.Sideband),
             rigConfig.PassbandHz ?? (bandPlan.IsFm ? 0 : (int)Math.Round(bandPlan.Window.WidthHz)));
     rig = new RigControl(new RigControlOptions

@@ -36,6 +36,49 @@ public class PcmTransferTests
     }
 
     [Fact]
+    public void Stopped_At_An_Overrun_A_Read_Returns_What_Came_Before_It_And_The_Next_One_Counts_It()
+    {
+        // An IQ capture (#596) is told where a gap lies, so a read must not span one.
+        var card = new ScriptedPcm(isCapture: true, 200, Epipe, 480);
+        int deferred = 0;
+
+        int before = PcmTransfer.Run(card, 480, out int failure, stopAtXrun: true, ref deferred);
+
+        before.Should().Be(200, "the frames before the overrun, and none after it");
+        failure.Should().Be(0);
+        card.Xruns.Should().Be(0, "counted by the read that returns the frames after the hole");
+        card.Calls.Should().Equal("transfer", "transfer");
+
+        int after = PcmTransfer.Run(card, 480, out failure, stopAtXrun: true, ref deferred);
+
+        after.Should().Be(480);
+        failure.Should().Be(0);
+        card.Xruns.Should().Be(1);
+        card.Calls.Should().Equal("transfer", "transfer", "recover", "start", "transfer");
+    }
+
+    [Fact]
+    public void Stopped_At_A_Hole_An_Io_Error_Whose_Recovery_Drops_Audio_Is_Reported_As_One()
+    {
+        // The prepare that gets a stream out of EIO throws away what the card held, so for an IQ
+        // capture it is a hole like an overrun: once before the next read's frames, mid-read...
+        var card = new ScriptedPcm(isCapture: true, 200, Eio, 480);
+        int deferred = 0;
+
+        PcmTransfer.Run(card, 480, out _, stopAtXrun: true, ref deferred).Should().Be(200);
+        card.Xruns.Should().Be(0);
+        PcmTransfer.Run(card, 480, out _, stopAtXrun: true, ref deferred).Should().Be(480);
+        card.Xruns.Should().Be(1);
+
+        // ...and once, not per retry, when it is met before anything is read.
+        var cold = new ScriptedPcm(isCapture: true, Eio, Eio, 480);
+        deferred = 0;
+        PcmTransfer.Run(cold, 480, out int failure, stopAtXrun: true, ref deferred).Should().Be(480);
+        failure.Should().Be(0);
+        cold.Xruns.Should().Be(1);
+    }
+
+    [Fact]
     public void A_Card_That_Will_Not_Restart_Yet_Is_Given_A_Pause_And_Another_Go()
     {
         // The bench failure exactly: EPIPE, prepare and start, and the card is still not ready.

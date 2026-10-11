@@ -62,6 +62,14 @@ internal abstract class StationDevice
     public virtual string? NoReceiveDialRefusal => null;
 
     /// <summary>
+    /// Where a <c>"rig"</c> section's rig is put, relative to the band plan's dial, Hz: 0 for a
+    /// radio whose audio is the channel. A radio whose IQ the station picks the channel out of is
+    /// put beside the dial instead, so the channel is not on the IQ's centre.
+    /// </summary>
+    /// <param name="sideband">The band plan's sideband.</param>
+    public virtual double RigDialOffsetHz(string sideband) => 0;
+
+    /// <summary>
     /// Why this station can receive and never transmit, or null for one that can transmit.
     /// </summary>
     public virtual string? ReceiveOnlyReason => null;
@@ -110,7 +118,9 @@ internal abstract class StationDevice
 /// <param name="UberSdr">The <c>"ubersdr"</c> section, or null.</param>
 /// <param name="HasWaterfall">Whether the station serves a waterfall page.</param>
 /// <param name="OpenWebRx">The <c>"openwebrx"</c> section, or null.</param>
-internal sealed record DeviceSettings(UberSdrConfig? UberSdr, bool HasWaterfall, OpenWebRxConfig? OpenWebRx = null);
+/// <param name="IqCard">The <c>"iqCard"</c> section, or null.</param>
+internal sealed record DeviceSettings(
+    UberSdrConfig? UberSdr, bool HasWaterfall, OpenWebRxConfig? OpenWebRx = null, IqCardConfig? IqCard = null);
 
 /// <summary>
 /// What a device needs from the rest of start-up to open itself. Settled by the time the device

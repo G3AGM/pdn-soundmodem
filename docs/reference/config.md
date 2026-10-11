@@ -90,9 +90,10 @@ In the order `DaemonConfig` declares them. `sideband`, `dialFrequency` and each 
 | `flex:<radio>[:slice][@station]` | A FlexRadio over the LAN. `<radio>` is `discover`, `host[:port]`, `serial=...`, `name=...` or `mock`; slice `A` to `H`; `@station` attaches to a running SmartSDR's slice instead of creating one. |
 | `ubersdr:<instance>` | A public UberSDR web receiver's IQ stream, receive only. A host, a `host:port`, or the `https://` URL you would open in a browser. |
 | `openwebrx:<url>` | A public OpenWebRX or OpenWebRX+ receiver's demodulated audio, receive only. The URL you would open in a browser, path included; a bare host or `host:port` is taken as `http` on port 8073. |
+| `iqcard:<alsa device>` | IQ on a sound card's left and right inputs (a Xiegu G90, a SoftRock), receive only. See [`iqCard`](#iqcard). |
 
 - `captureRate` applies to ALSA and pipe devices only. It must be a multiple of the channel's DSP rate (12000, or 48000 when any 48 kHz mode is configured), or start-up refuses with `--capture-rate must be a multiple of N`. A pipe's own rate has the same rule: `pipe rate N is not a multiple of the channel's N Hz`.
-- A `flex:`, `ubersdr:` or `openwebrx:` device provides its own clock; `captureRate` is ignored.
+- A `flex:`, `ubersdr:` or `openwebrx:` device provides its own clock; `captureRate` is ignored. So does `iqcard:`, whose rate is `iqCard`.`sampleRate`.
 - A device that will not open exits 1 with a message naming the key and the file, and the service retries.
 
 ### Two cards: `captureDevice` and `playbackDevice`
@@ -539,6 +540,35 @@ Read for an `openwebrx:` device. Ignored otherwise. The receiver demodulates: th
 - The audio may be 4-bit ADPCM. That is the receiver operator's setting, and the start-up line says which.
 - Refused, exit 2: `ssbLowHz` and `ssbHighHz` that do not rise from 0 to at most 6000; an `fmHalfWidthHz` outside 1 to 6000; a negative `startupGuardMs`; a `gain` of 0 or less; an empty `profile`; any `ptt`, `rig`, `alsa.mixer`, `publish` or `identify`, each named under its own section.
 - The station receives only, as on `ubersdr:`. A receiver that cannot be reached, or will not serve the dial, at start-up exits 1 and the service retries. A busy receiver (`Too many clients`) does not stop start-up; the station waits and asks again.
+
+## `iqCard`
+
+```json
+{ "device": "iqcard:plughw:CARD=Device,DEV=0", "iqCard": { "centreFrequency": 10141300, "gainImbalanceDb": 0.4 } }
+```
+
+Read for an `iqcard:` device: IQ on a sound card's left (I) and right (Q) inputs, such as a Xiegu G90's IQ output or a SoftRock. Ignored otherwise. The station filters, tunes and demodulates the IQ itself, in the band plan's sideband (`usb`, `lsb` or `fm`), at the band plan's dial. [hardware/iq-sound-card.md](../hardware/iq-sound-card.md) walks through it.
+
+| Key | Type | Default | What it is |
+|---|---|---|---|
+| `centreFrequency` | number | absent: the rig's dial | The RF frequency the IQ is centred on, in Hz. |
+| `centreOffsetHz` | number | `0` | With a `rig` section and no `centreFrequency`, added to the rig's dial to give the centre, for a radio whose IQ is not centred on its dial. |
+| `channelOffsetHz` | number | an eighth of `sampleRate` (6000 at 48 kHz); for `"sideband": "fm"` at least 9000 | With a `rig` section, a band plan and no `centreFrequency`: how far above the IQ centre the channel's dial lands. The rig is tuned this far (plus `centreOffsetHz`) below the band plan's dial, so the card's DC offset and hum are clear of the channel. Must be inside half the sample rate. |
+| `sampleRate` | int | `48000` | The card's capture rate, 8000 to 768000. Any rate: the station resamples. |
+| `swapIq` | bool | `false` | Take I from the right input and Q from the left. |
+| `gainImbalanceDb` | number | `0` | How much louder Q is than I on this card, in dB, to be divided out; within 6 either way. |
+| `phaseImbalanceDegrees` | number | `0` | How far Q is from quadrature with I, in degrees, to be taken out; within 30 either way. |
+| `ssbLowHz` | number | `150` | Bottom of the SSB filter, Hz from the dial. |
+| `ssbHighHz` | number | `3450` | Top of the SSB filter. |
+| `gain` | number | `1.0` | Linear gain on the demodulated audio. There is no AGC. |
+
+- The channel is tuned by the band plan: every modem needs an `rfFrequency`, or `dialFrequency` must be set (`the IQ from X has to be told where to listen within the card's band ...`).
+- The centre comes from `centreFrequency`, or, with a `rig` section, from the rig's dial, which is then followed as the rig moves. Neither is exit 2 (`needs to know what RF frequency the card's IQ is centred on`); a rig that has not answered yet is exit 1, and the service retries.
+- A dial further from the centre than the card carries is exit 2 (`cannot hear the dial`). A centre inside the channel's audio, or within 1 kHz of it (a channel on the centre included), is a warning: the card's DC offset and hum are heard there.
+- About a minute after start-up the journal gives the balance measured on the card (`iq: the card's balance over 60 s: ...`): the figures to put in `gainImbalanceDb` and `phaseImbalanceDegrees`.
+- A capture overrun is marked in the audio as a gap of its own length, not spliced, and counted where the channel audio stream counts lost audio.
+- The card's mixer is not touched. Refused, exit 2: a `sampleRate` outside 8000 to 768000; a `centreFrequency` of 0 or less; an imbalance outside the limits above; `ssbLowHz` and `ssbHighHz` that do not rise from 0; a `gain` of 0 or less; any `ptt`.
+- The station receives only, as on `ubersdr:`. A card that will not open exits 1 and the service retries.
 
 ## `waterfall`
 

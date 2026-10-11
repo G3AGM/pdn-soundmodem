@@ -73,13 +73,47 @@ internal static class PcmTransfer
     /// <param name="pcm">The stream.</param>
     /// <param name="frameCount">Frames wanted.</param>
     /// <param name="failure">0, or the negative errno the stream gave up with.</param>
+    /// <param name="stopAtXrun">See the overload with <c>deferredHole</c>; off for an audio stream.</param>
     /// <returns>Frames transferred, which is <paramref name="frameCount"/> unless
     /// <paramref name="failure"/> is set.</returns>
-    internal static int Run(IPcmTransfer pcm, int frameCount, out int failure)
+    internal static int Run(IPcmTransfer pcm, int frameCount, out int failure, bool stopAtXrun = false)
+    {
+        int deferred = 0;
+        return Run(pcm, frameCount, out failure, stopAtXrun, ref deferred);
+    }
+
+    /// <summary>
+    /// <see cref="Run(IPcmTransfer, int, out int, bool)"/>, optionally ending at a hole in the
+    /// stream rather than reading across it.
+    /// </summary>
+    /// <param name="pcm">The stream.</param>
+    /// <param name="frameCount">Frames wanted.</param>
+    /// <param name="failure">0, or the negative errno the stream gave up with.</param>
+    /// <param name="stopAtXrun">Never return frames from both sides of a hole. Any fault the
+    /// recovery prepares the stream for (an xrun, or an <c>-EIO</c>/<c>-EBADFD</c>, whose prepare
+    /// throws away what the card was holding) is a hole: with frames already read, they are
+    /// returned and the fault is left in <paramref name="deferredHole"/> for the next call, which
+    /// counts it and recovers before reading; with none read, it is counted at once. So the xrun
+    /// count moves on exactly the call whose frames are the first after the hole. For an IQ capture
+    /// (<see cref="Packet.SoundModem.Iq.SoundCardIqSource"/>), whose consumer has to be told
+    /// where a gap lies.</param>
+    /// <param name="deferredHole">The caller's slot for a fault left for its next call; 0 for none.</param>
+    /// <returns>Frames transferred: <paramref name="frameCount"/>, or fewer when
+    /// <paramref name="failure"/> is set or a hole ended the call.</returns>
+    internal static int Run(IPcmTransfer pcm, int frameCount, out int failure, bool stopAtXrun, ref int deferredHole)
     {
         failure = 0;
         int done = 0;
         int attempts = 0;
+
+        if (deferredHole != 0)
+        {
+            int left = deferredHole;
+            deferredHole = 0;
+            pcm.CountXrun();
+            attempts = 1;
+            Recover(pcm, left);
+        }
 
         while (done < frameCount)
         {
@@ -96,10 +130,24 @@ internal static class PcmTransfer
             }
 
             int error = (int)moved;
+            bool hole = stopAtXrun && error != -Eintr && IsRecoverable(error);
+            if (hole && done > 0)
+            {
+                // Not counted and not recovered here: the next call does both first thing.
+                deferredHole = error;
+                return done;
+            }
+
             if (error is -Epipe or -Estrpipe)
             {
                 // The xrun proper: audio was lost here. EIO and EBADFD are the recovery itself
                 // not taking, so counting them too would report holes that never existed.
+                pcm.CountXrun();
+            }
+            else if (hole && attempts == 0)
+            {
+                // Except where a hole has to be reported: the first fault of a stall, which the
+                // prepare below turns into lost audio.
                 pcm.CountXrun();
             }
 

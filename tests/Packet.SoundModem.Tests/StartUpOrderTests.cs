@@ -114,6 +114,31 @@ public class StartUpOrderTests
     }
 
     /// <summary>
+    /// The sound-card IQ device (#596) opens a capture stream too, and the same rule holds there:
+    /// it does no mixer work today, and any it gains goes above the capture's construction.
+    /// </summary>
+    [Fact]
+    public void The_Iq_Card_Does_No_Mixer_Work_After_Its_Capture_Stream_Is_Opened()
+    {
+        string source = File.ReadAllText(Path.Combine(
+            FindRepoRoot(), "src", "Packet.SoundModem.Daemon", "Devices", "IqCardStationDevice.cs"));
+
+        int captureOpened = source.IndexOf("new AlsaStereoCapture(", StringComparison.Ordinal);
+        captureOpened.Should().BeGreaterThan(
+            -1, "the IQ card's capture is opened with new AlsaStereoCapture(...); if that moved or "
+              + "was renamed, this test needs updating rather than deleting");
+
+        string afterOpen = source[captureOpened..];
+        foreach (string mixerCall in new[] { "AlsaMixer.TryOpen(", "MixerRuntime.Start(", "MixerSetup.TryApply(" })
+        {
+            afterOpen.Should().NotContain(
+                mixerCall,
+                "every ALSA mixer call must finish before the PCM is opened, so on the IQ card it "
+                + "belongs above the AlsaStereoCapture construction");
+        }
+    }
+
+    /// <summary>
     /// And no mixer work comes back into <c>Program.cs</c> after the device is opened, where the
     /// two tests above, which read the device's own file, could not see it.
     /// </summary>

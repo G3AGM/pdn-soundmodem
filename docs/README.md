@@ -50,6 +50,7 @@ The two hardware pages are what to build to wire a CM108 interface to a radio: [
 - Hear GB7RDG's bulletins on a 40 m packet station by retuning the rig: [14-mailcast.md](14-mailcast.md#add-the-receiver).
 - Wire a Tait TM8100: [hardware/tait-tm8100-cm108.md](hardware/tait-tm8100-cm108.md).
 - Wire a Yaesu FT-450D: [hardware/yaesu-ft450d-cm108.md](hardware/yaesu-ft450d-cm108.md).
+- Receive a Xiegu G90's or a SoftRock's IQ through a sound card: [hardware/iq-sound-card.md](hardware/iq-sound-card.md).
 - Run two modems on one machine: [01-install.md](01-install.md#more-than-one-modem-on-one-machine).
 - Upgrade or remove it: [01-install.md](01-install.md#upgrading).
 
