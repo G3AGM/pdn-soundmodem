@@ -45,8 +45,8 @@ public sealed class RtlTcpAudioInputTests
         input.DialHz.Should().Be(DialHz);
 
         // What the default settling throws away after the settings (two of rtl_tcp's 256 KiB
-        // transfers, more than 100 ms at this rate) is led with, so the burst is all heard.
-        server.Send(new byte[2 * 262_144]);
+        // transfers and 100 ms at this rate) is led with, so the burst is all heard.
+        server.Send(new byte[(2 * 262_144) + (2 * Rate / 10)]);
         server.Send(dongle);
 
         float[] heard = ReadSeconds(input, sim.Rate, (double)dongle.Length / 2 / Rate);

@@ -55,16 +55,18 @@ public sealed record RtlTcpSourceOptions
     public TimeSpan ReconnectDelayCap { get; init; } = TimeSpan.FromSeconds(30);
 
     /// <summary>
-    /// How much of the stream to throw away after this client retunes or sets the rate, on top
-    /// of what was already on its way: the dongle's settling and the server's own buffering,
-    /// whose samples are at a tuning nobody can tell. Counted as lost.
+    /// How long a stretch of the stream, at the new rate, to throw away after this client retunes
+    /// or sets the rate, on top of what had reached the socket and
+    /// <see cref="RetuneDiscardFloorBytes"/>: what was in flight on the link and the tuner
+    /// settling, whose samples are at a tuning nobody can tell. Counted as lost.
     /// </summary>
     public TimeSpan RetuneSettle { get; init; } = TimeSpan.FromMilliseconds(100);
 
     /// <summary>
-    /// The least thrown away after a retune or a connect, in bytes, whatever the rate: rtl_tcp
-    /// hands the dongle's samples on in 256 KiB transfers, and the one being filled when a
-    /// command lands is part old tuning and part new. Two of them by default.
+    /// Bytes thrown away after a retune or a connect whatever the rate, on top of
+    /// <see cref="RetuneSettle"/>: rtl_tcp hands the dongle's samples on in 256 KiB transfers,
+    /// and the one being filled when a command lands is part old tuning and part new, with
+    /// another queued behind it that the client cannot see. Two of them by default.
     /// </summary>
     public long RetuneDiscardFloorBytes { get; init; } = 2 * 262_144;
 
@@ -158,6 +160,7 @@ public sealed class RtlTcpIqSource : IIqSource, IDisposable
     private DateTimeOffset _lossFrom;       // up to when lost time has already been counted
     private TimeSpan _backoff;              // the wait before the next reconnect attempt
     private long _bytesThisConnection;
+    private int _receiveBufferBytes = 4096; // the socket's, read once a connect: the getter boxes
     private DateTimeOffset _nextStepLine = DateTimeOffset.MinValue;
 
     // Read from other threads; 64-bit, so Interlocked to keep a 32-bit Pi from tearing them.
@@ -273,7 +276,7 @@ public sealed class RtlTcpIqSource : IIqSource, IDisposable
     public async Task OpenAsync(CancellationToken cancellation)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        Socket socket = await ConnectAsync(cancellation).ConfigureAwait(false);
+        Socket socket = await Task.Run(() => Connect(cancellation), cancellation).ConfigureAwait(false);
         try
         {
             Publish(socket);
@@ -326,6 +329,14 @@ public sealed class RtlTcpIqSource : IIqSource, IDisposable
             _socket = socket;
             _connected = true;
             _bytesThisConnection = 0;
+            try
+            {
+                _receiveBufferBytes = socket.ReceiveBufferSize;
+            }
+            catch (SocketException)
+            {
+                _receiveBufferBytes = 4096;
+            }
         }
     }
 
@@ -636,10 +647,22 @@ public sealed class RtlTcpIqSource : IIqSource, IDisposable
         }
     }
 
-    /// <summary>What is thrown away after a retune or a connect at <paramref name="rate"/>, in
-    /// bytes: the settling time, or the server's transfers, whichever is more. Always even.</summary>
+    /// <summary>
+    /// What is thrown away after a retune or a connect at <paramref name="rate"/>, on top of what
+    /// the client had already received and not read, in bytes; always even.
+    /// </summary>
+    /// <remarks>
+    /// Two parts, added rather than the larger taken, because they cover different things. The
+    /// floor is the server's side: the USB transfer being filled when the command lands, and the
+    /// one already queued behind it, which no client can see (<c>Available</c> counts only what
+    /// reached this socket). The settling time is the link's and the tuner's: what was in flight
+    /// on the wire and in the kernel's buffers when the command went, and the dongle settling at
+    /// the new tuning, worth that long at the new rate. A link slower than the stream is the one
+    /// case this does not bound: the server's queue then grows without limit, and the rate watch
+    /// sees the reader set the pace; no client-side count can cover it.
+    /// </remarks>
     private long SettleBytes(int rate) =>
-        Math.Max(2L * (long)Math.Round(rate * _options.RetuneSettle.TotalSeconds), (_options.RetuneDiscardFloorBytes + 1) & ~1L);
+        (2L * (long)Math.Round(rate * _options.RetuneSettle.TotalSeconds)) + ((_options.RetuneDiscardFloorBytes + 1) & ~1L);
 
     /// <summary>Whether the reader has fallen behind the server: a backlog of more than half the
     /// socket's buffer, or half a second of samples, whichever is less.</summary>
@@ -648,7 +671,7 @@ public sealed class RtlTcpIqSource : IIqSource, IDisposable
         try
         {
             int backlog = socket.Available;
-            long threshold = Math.Min(Math.Max(socket.ReceiveBufferSize / 2, 4096), SampleRate);
+            long threshold = Math.Min(Math.Max(_receiveBufferBytes / 2, 4096), SampleRate);
             return backlog >= threshold;
         }
         catch (Exception e) when (e is SocketException or ObjectDisposedException)
@@ -730,7 +753,7 @@ public sealed class RtlTcpIqSource : IIqSource, IDisposable
             Socket socket;
             try
             {
-                socket = ConnectAsync(_closing.Token).GetAwaiter().GetResult();
+                socket = Connect(_closing.Token);
                 try
                 {
                     Publish(socket);
@@ -782,56 +805,71 @@ public sealed class RtlTcpIqSource : IIqSource, IDisposable
     }
 
     /// <summary>Connects and reads the header; the settings are sent by <see cref="Publish"/>.</summary>
-    private async Task<Socket> ConnectAsync(CancellationToken cancellation)
+    /// <remarks>
+    /// Synchronous on purpose, timed out by closing the socket. .NET puts a socket that has once
+    /// been used asynchronously into non-blocking mode for good, and a blocking
+    /// <see cref="Socket.Receive(Span{byte})"/> on such a socket allocates every time it has to
+    /// wait, which for a reader that keeps up is every read. Kept blocking, the steady-state read
+    /// allocates nothing (<c>A_Steady_Stream_Is_Read_Without_Allocating</c>).
+    /// </remarks>
+    private Socket Connect(CancellationToken cancellation)
     {
+        cancellation.ThrowIfCancellationRequested();
+        var socket = new Socket(SocketType.Stream, ProtocolType.Tcp) { NoDelay = true };
+        int timedOut = 0;
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellation);
         timeout.CancelAfter(_options.ConnectTimeout);
-        var socket = new Socket(SocketType.Stream, ProtocolType.Tcp) { NoDelay = true };
+        using CancellationTokenRegistration closer = timeout.Token.Register(() =>
+        {
+            Volatile.Write(ref timedOut, 1);
+            socket.Dispose();
+        });
         try
         {
+            string stage = $"no answer from {_endpoint} in {_options.ConnectTimeout.TotalSeconds:F0} s";
             try
             {
-                await socket.ConnectAsync(_endpoint.Host, _endpoint.Port, timeout.Token).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException) when (!cancellation.IsCancellationRequested)
-            {
-                throw new IOException($"no answer from {_endpoint} in {_options.ConnectTimeout.TotalSeconds:F0} s");
-            }
+                socket.Connect(_endpoint.Host, _endpoint.Port);
+                stage = $"{_endpoint} accepted the connection and then sent nothing in "
+                    + $"{_options.ConnectTimeout.TotalSeconds:F0} s";
+                byte[] header = new byte[RtlTcpProtocol.HeaderLength];
+                int have = 0;
+                while (have < header.Length)
+                {
+                    int n = socket.Receive(header.AsSpan(have));
+                    if (n == 0)
+                    {
+                        throw new IOException($"{_endpoint} closed the connection before sending anything; "
+                            + "rtl_tcp serves one client at a time, so another may have it");
+                    }
 
-            byte[] header = new byte[RtlTcpProtocol.HeaderLength];
-            int have = 0;
-            while (have < header.Length)
-            {
-                int n;
-                try
-                {
-                    n = await socket.ReceiveAsync(header.AsMemory(have), SocketFlags.None, timeout.Token).ConfigureAwait(false);
-                }
-                catch (OperationCanceledException) when (!cancellation.IsCancellationRequested)
-                {
-                    throw new IOException($"{_endpoint} accepted the connection and then sent nothing in "
-                        + $"{_options.ConnectTimeout.TotalSeconds:F0} s");
+                    have += n;
                 }
 
-                if (n == 0)
+                RtlTcpHeader? parsed = RtlTcpProtocol.ParseHeader(header);
+                if (parsed != Header || !_headerSaid)
                 {
-                    throw new IOException($"{_endpoint} closed the connection before sending anything; "
-                        + "rtl_tcp serves one client at a time, so another may have it");
+                    _headerSaid = true;
+                    Say(parsed is RtlTcpHeader h
+                        ? $"rtltcp: {_endpoint} has a dongle with an {h.TunerName} tuner ({h.GainCount} gain steps)"
+                        : $"rtltcp: {_endpoint} sent no dongle header; taking its stream as IQ from the start");
                 }
 
-                have += n;
+                Header = parsed;
             }
-
-            RtlTcpHeader? parsed = RtlTcpProtocol.ParseHeader(header);
-            if (parsed != Header || !_headerSaid)
+            catch (Exception e) when (Volatile.Read(ref timedOut) == 1 && e is SocketException or ObjectDisposedException)
             {
-                _headerSaid = true;
-                Say(parsed is RtlTcpHeader h
-                    ? $"rtltcp: {_endpoint} has a dongle with an {h.TunerName} tuner ({h.GainCount} gain steps)"
-                    : $"rtltcp: {_endpoint} sent no dongle header; taking its stream as IQ from the start");
+                cancellation.ThrowIfCancellationRequested();
+                throw new IOException(stage);
             }
 
-            Header = parsed;
+            closer.Unregister();
+            if (Volatile.Read(ref timedOut) == 1)
+            {
+                cancellation.ThrowIfCancellationRequested();
+                throw new IOException(stage);
+            }
+
             socket.ReceiveTimeout = (int)Math.Clamp(_options.NoDataTimeout.TotalMilliseconds, 1, int.MaxValue);
             return socket;
         }

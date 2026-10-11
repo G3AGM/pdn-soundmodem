@@ -360,6 +360,73 @@ public sealed class RtlTcpIqSourceTests
         await reader.WaitAsync(TimeSpan.FromSeconds(10));
     }
 
+    [Fact]
+    public async Task A_Steady_Stream_Is_Read_Without_Allocating()
+    {
+        const int rate = 1_000_000;
+        var clock = new FakeTimeProvider(new DateTimeOffset(2026, 10, 11, 12, 0, 0, TimeSpan.Zero));
+        using var server = new FakeRtlTcpServer();
+        using var source = new RtlTcpIqSource(server.Endpoint, ReadOnly() with
+        {
+            SampleRate = rate,
+            WatchProfile = true,
+            RateWindow = TimeSpan.FromMilliseconds(500),
+            TimeProvider = clock,
+        });
+        await source.OpenAsync(CancellationToken.None);
+        server.WaitForConnections(1);
+
+        // Noise-like bytes, the same block over and over, so the step watch has nothing to say.
+        var block = new byte[65536];
+        new Random(9).NextBytes(block);
+        for (int k = 0; k < block.Length; k++)
+        {
+            block[k] = (byte)(124 + (block[k] & 7));
+        }
+
+        using var streaming = new CancellationTokenSource();
+        Task feeder = Task.Run(() =>
+        {
+            try
+            {
+                while (!streaming.IsCancellationRequested)
+                {
+                    server.Send(block);
+                }
+            }
+            catch (Exception e) when (e is IOException or InvalidOperationException or ObjectDisposedException)
+            {
+            }
+        });
+
+        // The reads move the clock on by exactly what they returned, so the rate watch closes its
+        // windows on a stream at its rate and has nothing to say either: the steady state.
+        var buffer = new float[16384];
+        long allocated = 0;
+        for (int read = 0; read < 600; read++)
+        {
+            long before = GC.GetAllocatedBytesForCurrentThread();
+            int got = source.Read(buffer);
+            long after = GC.GetAllocatedBytesForCurrentThread();
+            got.Should().BeGreaterThan(0);
+            if (read >= 100)
+            {
+                allocated += after - before;
+            }
+
+            clock.Advance(TimeSpan.FromTicks(TimeSpan.TicksPerSecond * (got / 2) / rate));
+        }
+
+        streaming.Cancel();
+        source.Dispose();
+        server.DropClient();
+        await feeder.WaitAsync(TimeSpan.FromSeconds(10));
+
+        allocated.Should().Be(0, "a read of a steady stream, rate watch and all, allocates nothing");
+        source.ProfileDrops.Should().Be(0);
+        source.SuspectedProfileChanges.Should().Be(0);
+    }
+
     private static byte[] Ramp(int length)
     {
         var bytes = new byte[length];
