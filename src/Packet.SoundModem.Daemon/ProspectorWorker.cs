@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using Packet.SoundModem.Audio;
+using Packet.SoundModem.Modems;
 using Packet.SoundModem.Survey;
 
 namespace Packet.SoundModem.Daemon;
@@ -52,6 +53,8 @@ internal sealed class ProspectorWorker : IDisposable
 
     /// <param name="prospector">The analysis this worker feeds.</param>
     /// <param name="dspRate">The station's DSP rate, which its captures are written at.</param>
+    /// <param name="radioPath">The station's kind of radio, so only the modes meant for it are
+    /// tried (<see cref="CaptureSweep.ModesFor"/>); null for both.</param>
     /// <param name="time">Times each sweep and the throttle's sleep after it;
     /// <see cref="TimeProvider.System"/> if null.</param>
     /// <param name="shutdownWait">How long <see cref="Dispose"/> waits for a sweep in progress
@@ -60,16 +63,17 @@ internal sealed class ProspectorWorker : IDisposable
         ModemProspector prospector,
         int dspRate,
         TimeProvider? time = null,
-        TimeSpan? shutdownWait = null)
+        TimeSpan? shutdownWait = null,
+        RadioPath? radioPath = null)
     {
         ArgumentNullException.ThrowIfNull(prospector);
         _prospector = prospector;
         _time = time ?? TimeProvider.System;
         _shutdownWait = shutdownWait ?? TimeSpan.FromSeconds(2);
 
-        // Resolved once: the answer depends only on the station's rate, and working it out per
-        // capture would walk the catalogue thirty times an hour for the same list.
-        _modes = CaptureSweep.ModesFor(dspRate);
+        // Resolved once: the answer depends only on the station's rate and radio, and working it
+        // out per capture would walk the catalogue thirty times an hour for the same list.
+        _modes = CaptureSweep.ModesFor(dspRate, radioPath);
 
         _worker = new Thread(Loop)
         {

@@ -471,6 +471,7 @@ foreach (string spec in modemSpecs)
 // On a Flex the slice mode states the sideband, so it is not something to be configured
 // separately and disagreed with: DIGL alongside the default "usb" would mirror every modem
 // about the dial and say nothing.
+bool sidebandFromRadio = false;
 if (DeviceKinds.Of(device).OwnsTheRadio(device))
 {
     string? impliedSideband = RfPlan.SidebandForSliceMode(flexTuning.Mode);
@@ -495,6 +496,7 @@ if (DeviceKinds.Of(device).OwnsTheRadio(device))
         }
 
         sideband = impliedSideband;
+        sidebandFromRadio = true;
     }
 }
 
@@ -1600,6 +1602,15 @@ if (surveyConfig is not null)
         // should have it.
         if (surveyConfig.Propose)
         {
+            // Which kind of radio to propose modes for. "usb" is only the default when nothing
+            // says otherwise, so it is taken as SSB only where something did say: the config, a
+            // band plan written in RF terms, or a Flex slice mode. Told nothing, the sweep tries
+            // the modes for both.
+            RadioPath? proposeFor = RfPlan.IsFmRadio(pageSideband) ? RadioPath.Fm
+                : bandPlan is not null || sidebandWasStated || waterfallSidebandWasStated
+                  || sidebandFromRadio
+                    ? RadioPath.Ssb
+                    : null;
             var prospector = new ModemProspector(
                 new ModemProspectorOptions
                 {
@@ -1609,7 +1620,8 @@ if (surveyConfig is not null)
                 surveyBands,
                 surveyOptions.DialFrequencyHz,
                 surveyOptions.Sideband);
-            var prospectorWorker = new ProspectorWorker(prospector, DspRate, TimeProvider.System);
+            var prospectorWorker = new ProspectorWorker(
+                prospector, DspRate, TimeProvider.System, radioPath: proposeFor);
             prospectorLifetime = prospectorWorker;
             proposals = prospector.Proposals;
             prospectorCounts = () =>
@@ -1658,7 +1670,14 @@ if (surveyConfig is not null)
                 }
             };
             Console.WriteLine(
-                $"propose: on, {CaptureSweep.ModesFor(DspRate).Count} modes per capture, "
+                $"propose: on, {CaptureSweep.ModesFor(DspRate, proposeFor).Count} modes per capture"
+                + (proposeFor switch
+                {
+                    RadioPath.Ssb => " (the SSB modes)",
+                    RadioPath.Fm => " (the FM modes)",
+                    _ => " (SSB and FM: say \"sideband\" to try only one)",
+                })
+                + ", "
                 + $"{surveyConfig.ProposeMinCaptures} capture(s) of evidence needed "
                 + $"(a twentieth of one core; the receive path is never waited on)");
         }
