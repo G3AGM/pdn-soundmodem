@@ -69,7 +69,7 @@ If something else already runs the SDR, have it write into a FIFO and point the 
 "iqpipe": { "format": "cu8", "rate": 1024000, "centreFrequency": 144775000 }
 ```
 
-The modem creates the FIFO if it is not there. Each program that opens it and writes is a run; when it closes the FIFO, the modem waits for the next writer.
+The modem creates the FIFO if it is not there. Each program that opens it and writes is a run; when it closes the FIFO, the modem waits for the next writer. If none comes within 30 seconds, the [dead-feed watch](reference/config.md#deadfeed) restarts the station, as for any input that stops.
 
 `"device": "iqpipe:-"` reads standard input, for a pipeline run by hand: `rtl_sdr -f 144775000 -s 1024000 - | pdn-soundmodem --config ...`. Standard input is read once; when it ends, the station stops.
 

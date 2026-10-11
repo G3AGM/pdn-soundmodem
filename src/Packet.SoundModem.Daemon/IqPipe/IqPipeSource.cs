@@ -477,6 +477,13 @@ internal sealed class IqPipeSource : IIqSource, IDisposable
             }
 
             _delay = TimeSpan.FromTicks(Math.Min(_delay.Ticks * 2, _options.MaxRestartDelay.Ticks));
+
+            // A retune asked for during the wait is where this run starts.
+            lock (_gate)
+            {
+                centre = _pendingCentreHz ?? centre;
+                _pendingCentreHz = null;
+            }
         }
         else if (_everStarted)
         {
@@ -514,6 +521,7 @@ internal sealed class IqPipeSource : IIqSource, IDisposable
     /// <summary>Makes <paramref name="feed"/> the current run.</summary>
     private bool Adopt(IIqFeed feed, double centre)
     {
+        bool retunedMeanwhile;
         lock (_gate)
         {
             if (_stopping.IsCancellationRequested)
@@ -528,6 +536,14 @@ internal sealed class IqPipeSource : IIqSource, IDisposable
             _runFresh = true;
             _runPairs = 0;
             _carry = 0;
+            retunedMeanwhile = _pendingCentreHz is not null;
+        }
+
+        if (retunedMeanwhile)
+        {
+            // A retune came while this run was starting, and found nothing to end: end it now, so
+            // the next read starts the run that was asked for.
+            feed.Dispose();
         }
 
         return true;

@@ -38,6 +38,40 @@ public sealed class IqFrontEndFmLadderTests(ITestOutputHelper output)
             mode, cnrDb);
     }
 
+    /// <summary>
+    /// The <c>iqpipe:</c> device (issue #597) is the front end behind a format conversion, so its
+    /// one new step is quantisation: each pipe format against the floats, at 240 kS/s (an RTL-SDR's
+    /// low range) with the capture carried at -16 dBFS. Prints the table quoted in the PR.
+    /// </summary>
+    [Theory]
+    [InlineData("afsk1200-il2p", new double[] { 4, 6, 8, 10, 12 })]
+    [InlineData("fsk9600-il2p", new double[] { 6, 8, 10, 12, 15 })]
+    public void Fm_Front_End_Ladder_Through_Each_Pipe_Format(string mode, double[] cnrs)
+    {
+        Assert.SkipWhen(Environment.GetEnvironmentVariable("SM_MASK_GATE") != "1",
+            "set SM_MASK_GATE=1 for the pipe formats' FM ladder - the iqpipe: receive-path A/B");
+
+        const int bursts = 50;
+        const int rate = 240_000;
+        output.WriteLine($"{mode}, N={bursts}, seed 1, front end at {rate} S/s with the carrier 25 kHz off centre, pipe formats at {IqFrontEndBench.PipeRms} RMS");
+        output.WriteLine("| CNR dB | floats | cf32 | cs16 | cs8 | cu8 |");
+        output.WriteLine("|---:|---:|---:|---:|---:|---:|");
+        foreach (double cnr in cnrs)
+        {
+            int floats = IqFrontEndBench.RunPoint(mode, cnr, IqFmArm.FrontEnd, bursts, rate);
+            var heard = new List<int>();
+            foreach (IqSampleFormat format in new[] { IqSampleFormat.Cf32, IqSampleFormat.Cs16, IqSampleFormat.Cs8, IqSampleFormat.Cu8 })
+            {
+                heard.Add(IqFrontEndBench.RunPoint(mode, cnr, IqFmArm.FrontEnd, bursts, rate, pipeFormat: format));
+            }
+
+            output.WriteLine($"| {cnr:+0;-0} | {floats}/{bursts} | {string.Join(" | ", heard.Select(h => $"{h}/{bursts}"))} |");
+            heard.Should().OnlyContain(
+                h => h >= floats - 14,
+                "carrying {0} through a pipe format must cost no sensitivity at {1} dB CNR", mode, cnr);
+        }
+    }
+
     public static TheoryData<string, double[]> Ladders => new()
     {
         { "afsk1200-il2p", [4, 6, 8, 10, 12, 15] },

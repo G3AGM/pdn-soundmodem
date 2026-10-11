@@ -183,6 +183,11 @@ internal enum IqFmArm
 /// </remarks>
 internal static class IqFrontEndBench
 {
+    /// <summary>The level a capture is carried through a pipe format at, RMS per component of full
+    /// scale: about -16 dBFS, where a dongle's gain would put a noise-dominated band, with peaks
+    /// four to five standard deviations from clipping.</summary>
+    public const double PipeRms = 0.15;
+
     /// <summary>Where the carrier sits from the source's centre: the DC-clear offset a 2.4 MS/s
     /// dongle is given.</summary>
     public const double OffsetHz = 25000;
@@ -200,9 +205,13 @@ internal static class IqFrontEndBench
     /// RTL dongle would send it over rtl_tcp: scaled so its RMS on each axis is this fraction of
     /// full scale, cut to unsigned bytes, and turned back to floats by the rtl_tcp source's own
     /// table. Front end only.</param>
+    /// <param name="pipeFormat">For the front end: the format the capture is carried in, as an
+    /// <c>iqpipe:</c> device would read it (scaled to <see cref="PipeRms"/> a component, quantised,
+    /// clipped at full scale, and read back by <see cref="IqSampleFormats.Convert"/>), or null for
+    /// the floats as made.</param>
     public static int RunPoint(
         string mode, double cnrDb, IqFmArm arm, int bursts, int sourceRate, int firstSeed = 1, int workers = 4,
-        double? frontEndIfHz = null, double? dongleRms = null)
+        double? frontEndIfHz = null, double? dongleRms = null, IqSampleFormat? pipeFormat = null)
     {
         FmModeProfile profile = FmModeProfiles.For(mode)
             ?? throw new ArgumentException($"'{mode}' is not an FM mode", nameof(mode));
@@ -212,14 +221,53 @@ internal static class IqFrontEndBench
         Parallel.For(
             0, bursts, new ParallelOptions { MaxDegreeOfParallelism = Math.Max(1, workers) },
             () => 0,
-            (b, _, local) => local + (RunBurst(mode, cnrDb, arm, sourceRate, deviation, ifBandwidth, frontEndIfHz, dongleRms, firstSeed + b) ? 1 : 0),
+            (b, _, local) => local + (RunBurst(mode, cnrDb, arm, sourceRate, deviation, ifBandwidth, frontEndIfHz, dongleRms, pipeFormat, firstSeed + b) ? 1 : 0),
             local => Interlocked.Add(ref successes, local));
         return successes;
     }
 
+    /// <summary>The capture as an <c>iqpipe:</c> device would hear it in <paramref name="format"/>:
+    /// scaled to <see cref="PipeRms"/>, written as that format's integers (rounded, clipped) and
+    /// read back through the device's own conversion.</summary>
+    public static float[] ThroughPipe(float[] iq, IqSampleFormat format)
+    {
+        double sum = 0;
+        foreach (float v in iq)
+        {
+            sum += v * (double)v;
+        }
+
+        double scale = PipeRms / Math.Sqrt(sum / Math.Max(1, iq.Length));
+        var bytes = new byte[iq.Length * IqSampleFormats.BytesPerPair(format) / 2];
+        for (int k = 0; k < iq.Length; k++)
+        {
+            double x = iq[k] * scale;
+            switch (format)
+            {
+                case IqSampleFormat.Cu8:
+                    bytes[k] = (byte)Math.Clamp(Math.Round((x * 127.5) + 127.5), 0, 255);
+                    break;
+                case IqSampleFormat.Cs8:
+                    bytes[k] = (byte)(sbyte)Math.Clamp(Math.Round(x * 128), -128, 127);
+                    break;
+                case IqSampleFormat.Cs16:
+                    System.Buffers.Binary.BinaryPrimitives.WriteInt16LittleEndian(
+                        bytes.AsSpan(2 * k), (short)Math.Clamp(Math.Round(x * 32768), -32768, 32767));
+                    break;
+                default:
+                    System.Buffers.Binary.BinaryPrimitives.WriteSingleLittleEndian(bytes.AsSpan(4 * k), (float)x);
+                    break;
+            }
+        }
+
+        var heard = new float[iq.Length];
+        IqSampleFormats.Convert(format, bytes, heard);
+        return heard;
+    }
+
     private static bool RunBurst(
         string mode, double cnrDb, IqFmArm arm, int sourceRate, double deviation, double ifBandwidth,
-        double? frontEndIfHz, double? dongleRms, int seed)
+        double? frontEndIfHz, double? dongleRms, IqSampleFormat? pipeFormat, int seed)
     {
         var sim = new SimModem(mode);
         byte[] frame = SimModem.Frame(60, seed);
@@ -250,6 +298,11 @@ internal static class IqFrontEndBench
         if (dongleRms is double rms && arm == IqFmArm.FrontEnd)
         {
             IqSynth.ThroughDongleBytes(iq, rms);
+        }
+
+        if (pipeFormat is IqSampleFormat format && arm == IqFmArm.FrontEnd)
+        {
+            iq = ThroughPipe(iq, format);
         }
 
         float[] heard;
