@@ -29,14 +29,22 @@ public sealed record CaptureReading(
 /// one DSP rate (the station's own), and only the modes that could be what the capture holds.
 /// </para>
 /// <para>
+/// <b>Only the modes meant for the station's radio.</b> The catalogue records each mode's radio
+/// path (<see cref="ModemCatalog.RadioPathFor"/>), and an SSB station is not offered an FM mode
+/// nor an FM station an SSB one: 9600 baud FSK feeds an FM radio's data socket and cannot come
+/// through an SSB receiver at all, and 300 baud AFSK on a VHF FM channel is not traffic anyone
+/// sends. A station that has not said what its radio is gets both.
+/// </para>
+/// <para>
 /// <b>Only the modes the station could run.</b> A 12 kHz station's captures are 12 kHz, and this
 /// deliberately does not resample them to try the 48 kHz modes: a station that cannot run a mode
 /// gains nothing from being told it heard one. A 48 kHz station can run every 12 kHz built-in
 /// mode as well as its own, so its captures are tried with both - the 12 kHz ones at 12 kHz
 /// behind the rate bridge, as its channel would run them. Until 2026-10-10 this took the
-/// station's rate alone, and GB7RDG's survey went blind on 40 m the day an ms110d modem moved
-/// its channel to 48 kHz: 118 of 4950 captures readable before, 5 of 2100 after, because only
-/// the FM 9600 family was being tried against HF packet bursts.
+/// station's rate alone and no radio path, and GB7RDG's survey went blind on 40 m the day an
+/// ms110d modem moved its channel to 48 kHz: 118 of 4950 captures readable before, 5 of 2100
+/// after, because the only modes left at that rate were the FM 9600 family, tried against HF
+/// packet bursts they could never have been.
 /// </para>
 /// <para>
 /// <b>Not the HF data waveforms.</b> They are most of the running time of a full sweep and they
@@ -46,19 +54,23 @@ public sealed record CaptureReading(
 /// </remarks>
 public static class CaptureSweep
 {
-    /// <summary>Modes worth trying against a capture at <paramref name="dspRate"/>.</summary>
+    /// <summary>Modes worth trying against a capture at <paramref name="dspRate"/> from a
+    /// station on <paramref name="path"/>.</summary>
+    /// <param name="dspRate">The station's channel rate.</param>
+    /// <param name="path">The station's kind of radio, or null when it has not said, which tries
+    /// both. A plugin mode declares no path and is tried on either.</param>
     /// <remarks>
     /// Stated as an exclusion so a mode added to the catalogue joins automatically - the safe
     /// direction, since the failure mode here is a station never being told about traffic it
     /// could read. The baseband <c>fsk*</c>/<c>c4fsk*</c> family is included and simply ignores
     /// the centre, occupying DC upwards.
     /// </remarks>
-    public static IReadOnlyList<string> ModesFor(int dspRate)
+    public static IReadOnlyList<string> ModesFor(int dspRate, RadioPath? path = null)
     {
         var modes = new List<string>();
         foreach (string mode in ModemCatalog.KnownModes)
         {
-            if (RunsAt(mode, dspRate) && IsPacketMode(mode))
+            if (RunsAt(mode, dspRate) && IsPacketMode(mode) && Suits(mode, path))
             {
                 modes.Add(mode);
             }
@@ -79,6 +91,11 @@ public static class CaptureSweep
         return native == dspRate
             || (!ModemPluginRegistry.IsRegistered(mode) && native < dspRate && dspRate % native == 0);
     }
+
+    /// <summary>Whether <paramref name="mode"/> is meant for a station on <paramref name="path"/>;
+    /// always, when either side does not say.</summary>
+    public static bool Suits(string mode, RadioPath? path) =>
+        path is null || ModemCatalog.RadioPathFor(mode) is not RadioPath meant || meant == path;
 
     /// <summary>Whether a mode is packet-radio lineage rather than an HF data waveform.</summary>
     public static bool IsPacketMode(string mode) =>

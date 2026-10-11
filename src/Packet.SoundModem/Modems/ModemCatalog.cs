@@ -72,6 +72,8 @@ public static class ModemCatalog
     /// factory that must agree with it.</summary>
     /// <param name="Name">The mode string.</param>
     /// <param name="DspRate">DSP rate the mode's chain runs at (12000 or 48000).</param>
+    /// <param name="Path">The kind of radio the mode is meant for: the "Radio path" column of
+    /// <c>docs/05-modes.md</c>, which <c>ReferenceDocsTests</c> holds to this.</param>
     /// <param name="Centre">Where its audio centre comes from.</param>
     /// <param name="DefaultCentreHz">The centre used when no override is given - the
     /// tone-pair midpoint, the PSK carrier, or the spec-pinned centre; null for baseband.
@@ -94,6 +96,7 @@ public static class ModemCatalog
     private sealed record ModeDescriptor(
         string Name,
         int DspRate,
+        RadioPath Path,
         CentreSemantics Centre,
         double? DefaultCentreHz,
         bool RunsIl2pCrc,
@@ -101,7 +104,7 @@ public static class ModemCatalog
         Func<ModemBuild, IModem> Factory);
 
     private static ModeDescriptor Ms110d(int waveform) => new(
-        $"ms110d-wn{waveform}", 48000, CentreSemantics.Shifted,
+        $"ms110d-wn{waveform}", 48000, RadioPath.Ssb, CentreSemantics.Shifted,
         // MIL-STD-188-110D Table D-I: a 2400 Bd single carrier on an 1800 Hz sub-carrier.
         DefaultCentreHz: 1800, RunsIl2pCrc: true, NinoPskIdBeacon: false,
         b => new Ms110dModem(
@@ -113,7 +116,7 @@ public static class ModemCatalog
 
     private static ModeDescriptor FreeDv(
         string name, double centreHz, Func<ModemBuild, IModem> factory) => new(
-        name, 48000, CentreSemantics.Shifted,
+        name, 48000, RadioPath.Ssb, CentreSemantics.Shifted,
         DefaultCentreHz: centreHz, RunsIl2pCrc: true, NinoPskIdBeacon: false, factory);
 
     /// <summary>
@@ -127,7 +130,7 @@ public static class ModemCatalog
     /// from <see cref="OfdmFmPresets.Table"/>, which is also what the docs and the tests read, so a
     /// mode cannot drift from the geometry it is documented as having.</remarks>
     private static ModeDescriptor OfdmFmMode(string name) => new(
-        name, 48000, CentreSemantics.Baseband,
+        name, 48000, RadioPath.Fm, CentreSemantics.Baseband,
         DefaultCentreHz: null, RunsIl2pCrc: false, NinoPskIdBeacon: false,
         b => new OfdmFmModem(
             name,
@@ -139,55 +142,55 @@ public static class ModemCatalog
 
     private static readonly ModeDescriptor[] Modes =
     [
-        new("afsk1200", 12000, CentreSemantics.Native, 1700, RunsIl2pCrc: false, NinoPskIdBeacon: false,
+        new("afsk1200", 12000, RadioPath.Fm, CentreSemantics.Native, 1700, RunsIl2pCrc: false, NinoPskIdBeacon: false,
             b => new Afsk1200Modem(b.DspRate, b.FrameReceived, b.CentreHz!.Value)),
-        new("afsk1200-fx25", 12000, CentreSemantics.Native, 1700, RunsIl2pCrc: false, NinoPskIdBeacon: false,
+        new("afsk1200-fx25", 12000, RadioPath.Fm, CentreSemantics.Native, 1700, RunsIl2pCrc: false, NinoPskIdBeacon: false,
             b => new Afsk1200Modem(b.DspRate, b.FrameReceived, b.CentreHz!.Value, Fx25Mode.TransmitReceive)),
-        new("afsk1200-fx25rx", 12000, CentreSemantics.Native, 1700, RunsIl2pCrc: false, NinoPskIdBeacon: false,
+        new("afsk1200-fx25rx", 12000, RadioPath.Fm, CentreSemantics.Native, 1700, RunsIl2pCrc: false, NinoPskIdBeacon: false,
             b => new Afsk1200Modem(b.DspRate, b.FrameReceived, b.CentreHz!.Value, Fx25Mode.Receive)),
-        new("afsk1200-multi", 12000, CentreSemantics.Native, 1700, RunsIl2pCrc: false, NinoPskIdBeacon: false,
+        new("afsk1200-multi", 12000, RadioPath.Fm, CentreSemantics.Native, 1700, RunsIl2pCrc: false, NinoPskIdBeacon: false,
             b => new Afsk1200MultiModem(b.DspRate, b.FrameReceived, offsetPairs: 3, centerFrequency: b.CentreHz!.Value)),
-        new("afsk1200-il2p", 12000, CentreSemantics.Native, 1700, RunsIl2pCrc: true, NinoPskIdBeacon: false,
+        new("afsk1200-il2p", 12000, RadioPath.Fm, CentreSemantics.Native, 1700, RunsIl2pCrc: true, NinoPskIdBeacon: false,
             b => new Afsk1200Il2pModem(b.DspRate, b.FrameReceived, crc: true, b.CentreHz!.Value, b.AcceptPlainIl2p)),
-        new("afsk1200-il2p-nocrc", 12000, CentreSemantics.Native, 1700, RunsIl2pCrc: false, NinoPskIdBeacon: false,
+        new("afsk1200-il2p-nocrc", 12000, RadioPath.Fm, CentreSemantics.Native, 1700, RunsIl2pCrc: false, NinoPskIdBeacon: false,
             b => new Afsk1200Il2pModem(b.DspRate, b.FrameReceived, crc: false, b.CentreHz!.Value)),
 
         // The 300 baud HF AFSK family defaults to the narrow-branch frequency-diversity
         // bank - on the live 40 m slot the single wide modem lost most frames to a
         // neighbouring QSO inside its passband (see Afsk300MultiModem). offsetPairs/
         // offsetStepHz tune it (offsetPairs:0 gives a single tight-filtered modem).
-        new("afsk300", 12000, CentreSemantics.Native, 1700, RunsIl2pCrc: false, NinoPskIdBeacon: false,
+        new("afsk300", 12000, RadioPath.Ssb, CentreSemantics.Native, 1700, RunsIl2pCrc: false, NinoPskIdBeacon: false,
             b => new Afsk300MultiModem(b.DspRate, b.FrameReceived, Afsk300Framing.Ax25,
                 b.CentreHz!.Value, b.OffsetPairs ?? 5, b.OffsetStepHz)),
-        new("afsk300-il2p", 12000, CentreSemantics.Native, 1700, RunsIl2pCrc: false, NinoPskIdBeacon: false,
+        new("afsk300-il2p", 12000, RadioPath.Ssb, CentreSemantics.Native, 1700, RunsIl2pCrc: false, NinoPskIdBeacon: false,
             b => new Afsk300MultiModem(b.DspRate, b.FrameReceived, Afsk300Framing.Il2p,
                 b.CentreHz!.Value, b.OffsetPairs ?? 5, b.OffsetStepHz)),
-        new("afsk300-il2pc", 12000, CentreSemantics.Native, 1700, RunsIl2pCrc: true, NinoPskIdBeacon: false,
+        new("afsk300-il2pc", 12000, RadioPath.Ssb, CentreSemantics.Native, 1700, RunsIl2pCrc: true, NinoPskIdBeacon: false,
             b => new Afsk300MultiModem(b.DspRate, b.FrameReceived, Afsk300Framing.Il2pCrc,
                 b.CentreHz!.Value, b.OffsetPairs ?? 5, b.OffsetStepHz, b.AcceptPlainIl2p)),
 
         // BPSK defaults to the differential frequency-diversity bank - offsetPairs/
         // offsetStepHz tune it (offsetPairs:0 gives a plain single modem).
-        new("bpsk300", 12000, CentreSemantics.Native, 1500, RunsIl2pCrc: true, NinoPskIdBeacon: true,
+        new("bpsk300", 12000, RadioPath.Ssb, CentreSemantics.Native, 1500, RunsIl2pCrc: true, NinoPskIdBeacon: true,
             b => new BpskMultiModem(b.DspRate, b.FrameReceived, crc: true, b.CentreHz!.Value,
                 baud: 300, offsetPairs: b.OffsetPairs ?? 4, offsetHz: b.OffsetStepHz,
                 detector: b.Detector, acceptPlainIl2p: b.AcceptPlainIl2p,
                 secondDetector: b.SecondDetector)),
-        new("bpsk300-multi", 12000, CentreSemantics.Native, 1500, RunsIl2pCrc: true, NinoPskIdBeacon: true,
+        new("bpsk300-multi", 12000, RadioPath.Ssb, CentreSemantics.Native, 1500, RunsIl2pCrc: true, NinoPskIdBeacon: true,
             b => new BpskMultiModem(b.DspRate, b.FrameReceived, crc: true, b.CentreHz!.Value,
                 baud: 300, offsetPairs: b.OffsetPairs ?? 4, offsetHz: b.OffsetStepHz,
                 detector: b.Detector, acceptPlainIl2p: b.AcceptPlainIl2p,
                 secondDetector: b.SecondDetector)),
-        new("bpsk300-nocrc", 12000, CentreSemantics.Native, 1500, RunsIl2pCrc: false, NinoPskIdBeacon: true,
+        new("bpsk300-nocrc", 12000, RadioPath.Ssb, CentreSemantics.Native, 1500, RunsIl2pCrc: false, NinoPskIdBeacon: true,
             b => new BpskMultiModem(b.DspRate, b.FrameReceived, crc: false, b.CentreHz!.Value,
                 baud: 300, offsetPairs: b.OffsetPairs ?? 4, offsetHz: b.OffsetStepHz,
                 detector: b.Detector, secondDetector: b.SecondDetector)),
-        new("bpsk1200", 12000, CentreSemantics.Native, 1500, RunsIl2pCrc: true, NinoPskIdBeacon: true,
+        new("bpsk1200", 12000, RadioPath.Ssb, CentreSemantics.Native, 1500, RunsIl2pCrc: true, NinoPskIdBeacon: true,
             b => new BpskMultiModem(b.DspRate, b.FrameReceived, crc: true, b.CentreHz!.Value,
                 baud: 1200, offsetPairs: b.OffsetPairs ?? 4, offsetHz: b.OffsetStepHz,
                 detector: b.Detector, acceptPlainIl2p: b.AcceptPlainIl2p,
                 secondDetector: b.SecondDetector)),
-        new("bpsk1200-multi", 12000, CentreSemantics.Native, 1500, RunsIl2pCrc: true, NinoPskIdBeacon: true,
+        new("bpsk1200-multi", 12000, RadioPath.Ssb, CentreSemantics.Native, 1500, RunsIl2pCrc: true, NinoPskIdBeacon: true,
             b => new BpskMultiModem(b.DspRate, b.FrameReceived, crc: true, b.CentreHz!.Value,
                 baud: 1200, offsetPairs: b.OffsetPairs ?? 4, offsetHz: b.OffsetStepHz,
                 detector: b.Detector, acceptPlainIl2p: b.AcceptPlainIl2p,
@@ -195,34 +198,34 @@ public static class ModemCatalog
 
         // QPSK runs the same differential frequency-diversity bank as BPSK since issue #326;
         // offsetPairs/offsetStepHz tune it (offsetPairs:0 gives a plain single modem).
-        new("qpsk600", 12000, CentreSemantics.Native, 1500, RunsIl2pCrc: true, NinoPskIdBeacon: true,
+        new("qpsk600", 12000, RadioPath.Ssb, CentreSemantics.Native, 1500, RunsIl2pCrc: true, NinoPskIdBeacon: true,
             b => new QpskMultiModem(b.DspRate, b.FrameReceived, crc: true, b.CentreHz!.Value,
                 baud: 300, offsetPairs: b.OffsetPairs ?? 4, offsetHz: b.OffsetStepHz,
                 detector: b.Detector, acceptPlainIl2p: b.AcceptPlainIl2p,
                 secondDetector: b.SecondDetector)),
-        new("qpsk2400", 12000, CentreSemantics.Native, 1500, RunsIl2pCrc: true, NinoPskIdBeacon: true,
+        new("qpsk2400", 12000, RadioPath.Ssb, CentreSemantics.Native, 1500, RunsIl2pCrc: true, NinoPskIdBeacon: true,
             b => new QpskMultiModem(b.DspRate, b.FrameReceived, crc: true, b.CentreHz!.Value,
                 baud: 1200, offsetPairs: b.OffsetPairs ?? 4, offsetHz: b.OffsetStepHz,
                 detector: b.Detector, acceptPlainIl2p: b.AcceptPlainIl2p,
                 secondDetector: b.SecondDetector)),
         // qpsk3600 arrives through FM, where the audio tones land on frequency whatever the RF
         // offset, and its decode chain runs threefold upsampled: no offset pairs unless asked.
-        new("qpsk3600", 12000, CentreSemantics.Native, 1650, RunsIl2pCrc: true, NinoPskIdBeacon: false,
+        new("qpsk3600", 12000, RadioPath.Fm, CentreSemantics.Native, 1650, RunsIl2pCrc: true, NinoPskIdBeacon: false,
             b => new QpskMultiModem(b.DspRate, b.FrameReceived, crc: true, b.CentreHz!.Value,
                 baud: 1800, offsetPairs: b.OffsetPairs ?? 0, offsetHz: b.OffsetStepHz,
                 detector: b.Detector, acceptPlainIl2p: b.AcceptPlainIl2p,
                 secondDetector: b.SecondDetector)),
 
-        new("fsk9600", 48000, CentreSemantics.Baseband, null, RunsIl2pCrc: false, NinoPskIdBeacon: false,
+        new("fsk9600", 48000, RadioPath.Fm, CentreSemantics.Baseband, null, RunsIl2pCrc: false, NinoPskIdBeacon: false,
             b => FskModem.Fsk9600(b.DspRate, b.FrameReceived, FskFraming.ClassicHdlc)),
-        new("fsk9600-il2p", 48000, CentreSemantics.Baseband, null, RunsIl2pCrc: true, NinoPskIdBeacon: false,
+        new("fsk9600-il2p", 48000, RadioPath.Fm, CentreSemantics.Baseband, null, RunsIl2pCrc: true, NinoPskIdBeacon: false,
             b => new FskModem(b.DspRate, b.FrameReceived, FskFraming.Il2pCrc,
                 acceptPlainIl2p: b.AcceptPlainIl2p)),
-        new("fsk4800-il2p", 48000, CentreSemantics.Baseband, null, RunsIl2pCrc: true, NinoPskIdBeacon: false,
+        new("fsk4800-il2p", 48000, RadioPath.Fm, CentreSemantics.Baseband, null, RunsIl2pCrc: true, NinoPskIdBeacon: false,
             b => FskModem.Fsk4800(b.DspRate, b.FrameReceived, acceptPlainIl2p: b.AcceptPlainIl2p)),
-        new("c4fsk9600", 48000, CentreSemantics.Baseband, null, RunsIl2pCrc: true, NinoPskIdBeacon: false,
+        new("c4fsk9600", 48000, RadioPath.Fm, CentreSemantics.Baseband, null, RunsIl2pCrc: true, NinoPskIdBeacon: false,
             b => C4fskModem.C4fsk9600(b.DspRate, b.FrameReceived, b.AcceptPlainIl2p)),
-        new("c4fsk19200", 48000, CentreSemantics.Baseband, null, RunsIl2pCrc: true, NinoPskIdBeacon: false,
+        new("c4fsk19200", 48000, RadioPath.Fm, CentreSemantics.Baseband, null, RunsIl2pCrc: true, NinoPskIdBeacon: false,
             b => C4fskModem.C4fsk19200(b.DspRate, b.FrameReceived, b.AcceptPlainIl2p)),
 
         // The datac modes nominally centre on 1500 Hz; the even-carrier-count ones land
@@ -353,6 +356,13 @@ public static class ModemCatalog
     public static int DspRateFor(string mode) =>
         ByName.TryGetValue(mode, out ModeDescriptor? found) ? found.DspRate
         : ModemPluginRegistry.DescriptorFor(mode)?.DspRate ?? 12000;
+
+    /// <summary>
+    /// The kind of radio a built-in mode is meant for (the mode table's "Radio path" column), or
+    /// null for a plugin mode or an unknown name, which declare none.
+    /// </summary>
+    public static RadioPath? RadioPathFor(string mode) =>
+        ByName.TryGetValue(mode, out ModeDescriptor? found) ? found.Path : null;
 
     /// <summary>
     /// Whether a mode has a settable audio-centre frequency. The variable-centre families - the

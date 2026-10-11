@@ -107,6 +107,55 @@ public partial class ReferenceDocsTests
     }
 
     [Fact]
+    public void The_Mode_Tables_Radio_Path_Column_Is_What_The_Catalogue_Says()
+    {
+        // The survey proposes modes by this answer, so a row saying FM for a mode the catalogue
+        // calls SSB is a station being offered the wrong modes, not a typo.
+        var wrong = new List<string>();
+        int checkedRows = 0;
+        int pathColumn = -1;
+        foreach (string line in ReadPage(ModesPage).Split('\n').Select(l => l.TrimEnd('\r')))
+        {
+            if (!line.StartsWith('|'))
+            {
+                pathColumn = -1;
+                continue;
+            }
+
+            string[] cells = line.Split('|').Select(c => c.Trim()).ToArray();
+            int header = Array.IndexOf(cells, "Radio path");
+            if (header >= 0)
+            {
+                pathColumn = header;
+                continue;
+            }
+
+            if (pathColumn < 0 || cells.Length <= pathColumn
+                || CodeSpan().Match(cells[1]) is not { Success: true } name)
+            {
+                continue;
+            }
+
+            string mode = name.Groups[1].Value;
+            string cell = cells[pathColumn];
+            RadioPath? documented = cell.Contains("SSB", StringComparison.Ordinal) ? RadioPath.Ssb
+                : cell.Contains("FM", StringComparison.Ordinal) ? RadioPath.Fm
+                : null;
+            checkedRows++;
+            if (documented != ModemCatalog.RadioPathFor(mode))
+            {
+                wrong.Add($"{mode}: the page says \"{cell}\", the catalogue {ModemCatalog.RadioPathFor(mode)}");
+            }
+        }
+
+        checkedRows.Should().BeGreaterThan(20, "the NinoTNC-lineage table has a Radio path column");
+        wrong.Should().BeEmpty(
+            "{0}'s Radio path column and ModemCatalog.RadioPathFor have to agree:{1}",
+            ModesPage,
+            string.Concat(wrong.Select(w => Environment.NewLine + "  " + w)));
+    }
+
+    [Fact]
     public void The_Usage_Block_In_The_Command_Line_Reference_Is_What_Help_Prints()
     {
         string[] lines = ReadPage(CommandLinePage).Split('\n').Select(l => l.TrimEnd('\r')).ToArray();

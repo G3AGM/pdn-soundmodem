@@ -51,13 +51,13 @@ public class ModemProspectorTests
         upsampler.Process(native, audio);
 
         IReadOnlyList<CaptureReading> readings = CaptureSweep.Run(
-            audio, nativeRate * 4, 1133.98, CaptureSweep.ModesFor(48000));
+            audio, nativeRate * 4, 1133.98, CaptureSweep.ModesFor(48000, RadioPath.Ssb));
 
         readings.Should().Contain(r => r.Source == Station && r.Mode == "afsk300");
     }
 
     [Fact]
-    public void A_48_kHz_Station_Tries_Every_Packet_Mode_It_Could_Run()
+    public void A_48_kHz_Station_That_Has_Not_Said_What_Its_Radio_Is_Tries_Every_Packet_Mode_It_Could_Run()
     {
         IReadOnlyList<string> modes = CaptureSweep.ModesFor(48000);
 
@@ -66,6 +66,33 @@ public class ModemProspectorTests
         modes.Should().Contain(["fsk9600-il2p", "c4fsk9600"]);
         modes.Should().NotContain(m => m.StartsWith("freedv-", StringComparison.Ordinal));
         modes.Should().NotContain(m => m.StartsWith("ms110d-", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void An_Ssb_Station_Is_Not_Offered_The_Fm_Modes()
+    {
+        // GB7RDG: 40 m USB through a Flex, at 48 kHz for its ms110d modem. 9600 baud FSK feeds an
+        // FM radio's data socket and cannot come through an SSB receiver; trying it against every
+        // unread burst was the cost of the sweep and none of its answers.
+        IReadOnlyList<string> modes = CaptureSweep.ModesFor(48000, RadioPath.Ssb);
+
+        modes.Should().Contain(["afsk300", "afsk300-il2pc", "bpsk300", "bpsk1200", "qpsk600", "qpsk2400"]);
+        modes.Should().NotContain(["afsk1200", "qpsk3600", "fsk9600", "fsk9600-il2p", "c4fsk9600"]);
+        modes.Should().NotContain(m => m.StartsWith("ofdm-fm-", StringComparison.Ordinal));
+        modes.Should().OnlyContain(m => ModemCatalog.RadioPathFor(m) == RadioPath.Ssb);
+    }
+
+    [Fact]
+    public void An_Fm_Station_Is_Not_Offered_The_Hf_Modes()
+    {
+        CaptureSweep.ModesFor(12000, RadioPath.Fm).Should().BeEquivalentTo(
+            ["afsk1200", "afsk1200-fx25", "afsk1200-fx25rx", "afsk1200-multi", "afsk1200-il2p",
+             "afsk1200-il2p-nocrc", "qpsk3600"],
+            "1200 baud AFSK and the one FM QPSK mode; 300 baud AFSK on a VHF channel is not traffic");
+
+        IReadOnlyList<string> wide = CaptureSweep.ModesFor(48000, RadioPath.Fm);
+        wide.Should().Contain(["afsk1200", "qpsk3600", "fsk9600", "fsk4800-il2p", "c4fsk9600"]);
+        wide.Should().NotContain(["afsk300", "bpsk300", "qpsk2400"]);
     }
 
     [Fact]

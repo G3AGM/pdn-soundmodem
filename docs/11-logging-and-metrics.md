@@ -148,6 +148,8 @@ Add `"propose": true` and each capture is read back with every mode that could h
 propose: add afsk300 at 7.050570 MHz - 34 frame(s) in 34 capture(s), PD4R-12, 19 dB, 2026-08-06 to 2026-08-24
 ```
 
+Only the packet modes meant for your kind of radio are tried, the "Radio path" column of the [mode tables](05-modes.md): an SSB station is not offered `fsk9600` and an FM station is not offered `afsk300`. The station knows its radio from `sideband`, from a band plan written in RF terms, or from a Flex slice mode. With none of those it tries both, and the `propose: on` line at start-up says which set it chose.
+
 A proposal either adds a modem where nobody was listening, or changes the framing of one that already covers the frequency and cannot read what is there. Three captures of evidence are needed by default, each carrying a frame whose own check sequence verified.
 
 With an [`api`](reference/config.md#api) key set, `GET /api/proposals` returns each proposal with a `config` you can POST to `/api/config`; see [the API](reference/ports-and-endpoints.md#the-api-under-api).
