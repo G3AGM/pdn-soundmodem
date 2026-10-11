@@ -62,6 +62,13 @@ public sealed record RtlTcpSourceOptions
     public TimeSpan RetuneSettle { get; init; } = TimeSpan.FromMilliseconds(100);
 
     /// <summary>
+    /// The least thrown away after a retune or a connect, in bytes, whatever the rate: rtl_tcp
+    /// hands the dongle's samples on in 256 KiB transfers, and the one being filled when a
+    /// command lands is part old tuning and part new. Two of them by default.
+    /// </summary>
+    public long RetuneDiscardFloorBytes { get; init; } = 2 * 262_144;
+
+    /// <summary>
     /// Whether to watch a read-only server for a profile switch: its rate against the wall clock
     /// (<see cref="IqRateWatch"/>, which drops the stream while it is wrong) and its character
     /// (<see cref="IqStepWatch"/>, which only says so). On by default; a controlled server is
@@ -124,6 +131,8 @@ public sealed class RtlTcpIqSource : IIqSource, IDisposable
     private volatile bool _disposed;
     private volatile bool _connected;
     private int _lostRaised;
+    private volatile bool _gaveUp;
+    private bool _headerSaid;
     private byte[] _bytes = [];
     private bool _haveCarry;
     private byte _carry;
@@ -133,6 +142,7 @@ public sealed class RtlTcpIqSource : IIqSource, IDisposable
     private double _wantedCentreHz;
     private int _wantedRate;
     private bool _retunePending;
+    private long _retuneSequence;
     private long _retuneDiscardBytes;
 
     // The reader's own state.
@@ -144,7 +154,10 @@ public sealed class RtlTcpIqSource : IIqSource, IDisposable
     private long _pendingLost;
     private bool _pendingGeneration;
     private bool _everDelivered;
-    private DateTimeOffset _goneSince;
+    private DateTimeOffset _goneSince;      // when samples last arrived: the give-up clock
+    private DateTimeOffset _lossFrom;       // up to when lost time has already been counted
+    private TimeSpan _backoff;              // the wait before the next reconnect attempt
+    private long _bytesThisConnection;
     private DateTimeOffset _nextStepLine = DateTimeOffset.MinValue;
 
     // Read from other threads; 64-bit, so Interlocked to keep a 32-bit Pi from tearing them.
@@ -177,6 +190,7 @@ public sealed class RtlTcpIqSource : IIqSource, IDisposable
         SampleRate = options.SampleRate;
         _wantedCentreHz = options.CentreFrequencyHz;
         _wantedRate = options.SampleRate;
+        _backoff = options.ReconnectDelay;
         if (options.WatchProfile)
         {
             _rateWatch = new IqRateWatch(options.SampleRate, options.RateWindow);
@@ -244,8 +258,9 @@ public sealed class RtlTcpIqSource : IIqSource, IDisposable
     }
 
     /// <summary>
-    /// Raised once, from the reader thread, when the server has been unreachable for
-    /// <see cref="RtlTcpSourceOptions.GiveUpAfter"/>; <see cref="Read"/> returns 0 from then on.
+    /// Raised once, from the reader thread, when the server has delivered nothing for
+    /// <see cref="RtlTcpSourceOptions.GiveUpAfter"/>, unreachable or connecting and then sending
+    /// nothing; <see cref="Read"/> returns 0 from then on.
     /// </summary>
     public event Action<string>? Lost;
 
@@ -259,20 +274,58 @@ public sealed class RtlTcpIqSource : IIqSource, IDisposable
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         Socket socket = await ConnectAsync(cancellation).ConfigureAwait(false);
-        lock (_sendGate)
+        try
         {
-            _socket = socket;
-            _connected = true;
+            Publish(socket);
+        }
+        catch
+        {
+            socket.Dispose();
+            throw;
         }
 
         DateTimeOffset now = _time.GetUtcNow();
         _rateWatch?.Restart(now);
         _goneSince = now;
+        _lossFrom = now;
         if (!_options.ReadOnly)
         {
-            // What the server was streaming before the settings landed is at its own defaults.
+            // What the server was streaming before the settings landed is at its own defaults,
+            // and nothing came before it, so it is not counted.
             _discardBytes = SettleBytes(_options.SampleRate);
             _discardCounts = false;
+            lock (_sendGate)
+            {
+                _retunePending = false;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Makes <paramref name="socket"/> the connection, sending the settings first on a controlled
+    /// server: under the same lock a <see cref="Tune"/> takes, so a retune either goes out on
+    /// this socket or is in the settings sent, never lost between the two.
+    /// </summary>
+    /// <exception cref="ObjectDisposedException">The source was closed meanwhile.</exception>
+    private void Publish(Socket socket)
+    {
+        lock (_sendGate)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            if (!_options.ReadOnly)
+            {
+                SendSettings(socket);
+
+                // Whatever comes first is at a tuning nobody can tell; and the settings just sent
+                // may carry a retune the reader has not taken up yet.
+                _retunePending = true;
+                _retuneSequence++;
+                _retuneDiscardBytes = SettleBytes(_wantedRate);
+            }
+
+            _socket = socket;
+            _connected = true;
+            _bytesThisConnection = 0;
         }
     }
 
@@ -322,6 +375,7 @@ public sealed class RtlTcpIqSource : IIqSource, IDisposable
             }
 
             _retunePending = true;
+            _retuneSequence++;
             _retuneDiscardBytes = inFlight + SettleBytes(Math.Max(rate, SampleRate));
         }
     }
@@ -339,7 +393,7 @@ public sealed class RtlTcpIqSource : IIqSource, IDisposable
             _bytes = new byte[interleaved.Length];
         }
 
-        while (!_disposed)
+        while (!_disposed && !_gaveUp)
         {
             Socket? socket = _socket;
             if (socket is null || !_connected)
@@ -352,7 +406,7 @@ public sealed class RtlTcpIqSource : IIqSource, IDisposable
                 continue;
             }
 
-            TakeUpRetune();
+            long sequence = TakeUpRetune();
 
             int want = interleaved.Length & ~1;
             int offset = 0;
@@ -402,6 +456,40 @@ public sealed class RtlTcpIqSource : IIqSource, IDisposable
             DateTimeOffset now = _time.GetUtcNow();
             Interlocked.Add(ref _bytesReceived, got);
             _goneSince = now;
+            _lossFrom = now;
+            _bytesThisConnection += got;
+            if (_bytesThisConnection >= 2L * SampleRate)
+            {
+                // A second of samples on this connection: it is healthy, so the next drop is
+                // retried promptly again.
+                _backoff = _options.ReconnectDelay;
+            }
+
+            if (TakeUpRetune() != sequence)
+            {
+                // A retune landed while the reader waited: what it woke with may be either side
+                // of it, so it goes with the settling.
+                _discardBytes += even;
+            }
+
+            // What is thrown away goes first, before anything is judged, so a retune is applied
+            // (and the rate watch told its rate) even while the stream is off its rate.
+            if (_discardBytes > 0)
+            {
+                int drop = (int)Math.Min(_discardBytes, even);
+                _discardBytes -= drop;
+                if (_discardCounts)
+                {
+                    _pendingLost += drop / 2;
+                }
+
+                bytes = bytes[drop..];
+                if (_discardBytes == 0 && _applyAfterDiscard)
+                {
+                    ApplyTuning();
+                }
+            }
+
             if (_rateWatch is not null)
             {
                 bool behind = Behind(socket);
@@ -427,30 +515,14 @@ public sealed class RtlTcpIqSource : IIqSource, IDisposable
 
                 if (_rateWatch.Off)
                 {
-                    _pendingLost += even / 2;
+                    _pendingLost += bytes.Length / 2;
                     continue;
                 }
             }
 
-            if (_discardBytes > 0)
+            if (bytes.IsEmpty)
             {
-                int drop = (int)Math.Min(_discardBytes, even);
-                _discardBytes -= drop;
-                if (_discardCounts)
-                {
-                    _pendingLost += drop / 2;
-                }
-
-                bytes = bytes[drop..];
-                if (_discardBytes == 0 && _applyAfterDiscard)
-                {
-                    ApplyTuning();
-                }
-
-                if (bytes.IsEmpty)
-                {
-                    continue;
-                }
+                continue;
             }
 
             int floats = bytes.Length;
@@ -514,17 +586,21 @@ public sealed class RtlTcpIqSource : IIqSource, IDisposable
         _everDelivered = true;
     }
 
-    private void TakeUpRetune()
+    /// <summary>Takes up a retune asked for since the last call, if there is one; returns the
+    /// retune count as it stands.</summary>
+    private long TakeUpRetune()
     {
         lock (_sendGate)
         {
             if (!_retunePending)
             {
-                return;
+                return _retuneSequence;
             }
 
             _retunePending = false;
-            _discardBytes += _retuneDiscardBytes;
+
+            // Whole I,Q pairs: an odd discard would start the next block on a Q.
+            _discardBytes = (_discardBytes + _retuneDiscardBytes + 1) & ~1L;
             _discardCounts = true;
             _applyAfterDiscard = true;
             _applyCentreHz = _wantedCentreHz;
@@ -533,6 +609,8 @@ public sealed class RtlTcpIqSource : IIqSource, IDisposable
             {
                 ApplyTuning();
             }
+
+            return _retuneSequence;
         }
     }
 
@@ -558,7 +636,10 @@ public sealed class RtlTcpIqSource : IIqSource, IDisposable
         }
     }
 
-    private long SettleBytes(int rate) => 2L * (long)(rate * _options.RetuneSettle.TotalSeconds);
+    /// <summary>What is thrown away after a retune or a connect at <paramref name="rate"/>, in
+    /// bytes: the settling time, or the server's transfers, whichever is more. Always even.</summary>
+    private long SettleBytes(int rate) =>
+        Math.Max(2L * (long)Math.Round(rate * _options.RetuneSettle.TotalSeconds), (_options.RetuneDiscardFloorBytes + 1) & ~1L);
 
     /// <summary>Whether the reader has fallen behind the server: a backlog of more than half the
     /// socket's buffer, or half a second of samples, whichever is less.</summary>
@@ -609,34 +690,65 @@ public sealed class RtlTcpIqSource : IIqSource, IDisposable
     private bool Reconnect()
     {
         DateTimeOffset since = _goneSince;
-        TimeSpan delay = _options.ReconnectDelay;
         DateTimeOffset nextFailureLine = DateTimeOffset.MinValue;
         int quietFailures = 0;
+        string? lastFailure = null;
+        bool wait = _bytesThisConnection < 2L * SampleRate;
         while (!_disposed)
         {
+            // Gone too long, whether the attempts fail or connect and then deliver nothing.
+            DateTimeOffset now = _time.GetUtcNow();
+            if (now - since >= _options.GiveUpAfter)
+            {
+                _gaveUp = true;
+                if (Interlocked.Exchange(ref _lostRaised, 1) == 0)
+                {
+                    Lost?.Invoke($"the rtl_tcp server at {_endpoint} has delivered nothing for "
+                        + $"{(now - since).TotalSeconds:F0} s" + (lastFailure is null ? "" : $" ({lastFailure})"));
+                }
+
+                return false;
+            }
+
+            // A connection that did not deliver for long is no reason to hammer the server: wait,
+            // and wait longer each time, until one does.
+            if (wait)
+            {
+                try
+                {
+                    Task.Delay(_backoff, _time, _closing.Token).GetAwaiter().GetResult();
+                }
+                catch (OperationCanceledException)
+                {
+                    return false;
+                }
+
+                _backoff = TimeSpan.FromTicks(Math.Min(_backoff.Ticks * 2, _options.ReconnectDelayCap.Ticks));
+            }
+
+            wait = true;
             Socket socket;
             try
             {
                 socket = ConnectAsync(_closing.Token).GetAwaiter().GetResult();
+                try
+                {
+                    Publish(socket);
+                }
+                catch
+                {
+                    socket.Dispose();
+                    throw;
+                }
             }
-            catch (OperationCanceledException) when (_disposed)
+            catch (Exception e) when (_disposed && e is OperationCanceledException or ObjectDisposedException or SocketException or IOException)
             {
                 return false;
             }
-            catch (Exception e) when (e is SocketException or IOException or OperationCanceledException or ObjectDisposedException)
+            catch (Exception e) when (e is SocketException or IOException or OperationCanceledException)
             {
-                DateTimeOffset now = _time.GetUtcNow();
-                if (now - since >= _options.GiveUpAfter)
-                {
-                    if (Interlocked.Exchange(ref _lostRaised, 1) == 0)
-                    {
-                        Lost?.Invoke($"the rtl_tcp server at {_endpoint} has been unreachable for "
-                            + $"{(now - since).TotalSeconds:F0} s ({e.Message})");
-                    }
-
-                    return false;
-                }
-
+                lastFailure = e.Message;
+                now = _time.GetUtcNow();
                 if (now >= nextFailureLine)
                 {
                     string more = quietFailures > 0 ? $" ({quietFailures} more failed attempt(s) since the last line)" : "";
@@ -649,53 +761,27 @@ public sealed class RtlTcpIqSource : IIqSource, IDisposable
                     quietFailures++;
                 }
 
-                try
-                {
-                    Task.Delay(delay, _time, _closing.Token).GetAwaiter().GetResult();
-                }
-                catch (OperationCanceledException)
-                {
-                    return false;
-                }
-
-                delay = TimeSpan.FromTicks(Math.Min(delay.Ticks * 2, _options.ReconnectDelayCap.Ticks));
                 continue;
             }
 
-            lock (_sendGate)
-            {
-                if (_disposed)
-                {
-                    socket.Dispose();
-                    return false;
-                }
-
-                _socket = socket;
-                _connected = true;
-                if (!_options.ReadOnly)
-                {
-                    // The settings just sent may be a retune the reader has not taken up; either
-                    // way what comes first is at a tuning nobody can tell.
-                    _retunePending = true;
-                    _retuneDiscardBytes = SettleBytes(_wantedRate);
-                }
-            }
-
+            // The time since the stream was last counted is lost; counted once, however many
+            // connections it took.
             DateTimeOffset back = _time.GetUtcNow();
-            TimeSpan gone = back - since;
+            TimeSpan gone = back - _lossFrom;
+            _lossFrom = back;
             Interlocked.Increment(ref _reconnects);
             _pendingLost += Math.Max(1, (long)(gone.TotalSeconds * SampleRate));
             _rateWatch?.Restart(back);
             _stepWatch?.Restart();
-            Say($"rtltcp: reconnected to {_endpoint} after {gone.TotalSeconds:F1} s; the time it was gone is "
-                + "marked as a gap");
+            Say($"rtltcp: reconnected to {_endpoint} after {(back - since).TotalSeconds:F1} s without samples; "
+                + "the time they were missing is marked as a gap");
             return true;
         }
 
         return false;
     }
 
-    /// <summary>Connects, reads the header and (controlled) sends the wanted settings.</summary>
+    /// <summary>Connects and reads the header; the settings are sent by <see cref="Publish"/>.</summary>
     private async Task<Socket> ConnectAsync(CancellationToken cancellation)
     {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellation);
@@ -737,8 +823,9 @@ public sealed class RtlTcpIqSource : IIqSource, IDisposable
             }
 
             RtlTcpHeader? parsed = RtlTcpProtocol.ParseHeader(header);
-            if (parsed != Header || !_everDelivered)
+            if (parsed != Header || !_headerSaid)
             {
+                _headerSaid = true;
                 Say(parsed is RtlTcpHeader h
                     ? $"rtltcp: {_endpoint} has a dongle with an {h.TunerName} tuner ({h.GainCount} gain steps)"
                     : $"rtltcp: {_endpoint} sent no dongle header; taking its stream as IQ from the start");
@@ -746,11 +833,6 @@ public sealed class RtlTcpIqSource : IIqSource, IDisposable
 
             Header = parsed;
             socket.ReceiveTimeout = (int)Math.Clamp(_options.NoDataTimeout.TotalMilliseconds, 1, int.MaxValue);
-            if (!_options.ReadOnly)
-            {
-                SendSettings(socket);
-            }
-
             return socket;
         }
         catch

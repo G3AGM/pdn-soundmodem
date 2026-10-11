@@ -38,6 +38,9 @@ internal sealed class FakeRtlTcpServer : IDisposable
 
     public int Connections => Volatile.Read(ref _connections);
 
+    /// <summary>Takes each new connection, sends the header, and closes it at once.</summary>
+    public bool CloseOnAccept { get; set; }
+
     public long BytesFromClient => Interlocked.Read(ref _bytesFromClient);
 
     public IReadOnlyList<(int Connection, RtlTcpCommand Command, uint Parameter)> Commands
@@ -137,6 +140,13 @@ internal sealed class FakeRtlTcpServer : IDisposable
                 var bytes = new byte[RtlTcpProtocol.HeaderLength];
                 RtlTcpProtocol.WriteHeader(bytes, header);
                 await client.GetStream().WriteAsync(bytes);
+            }
+
+            if (CloseOnAccept)
+            {
+                Interlocked.Increment(ref _connections);
+                client.Dispose();
+                continue;
             }
 
             int connection;

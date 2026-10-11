@@ -44,8 +44,9 @@ public sealed class RtlTcpAudioInputTests
         centre.Should().Be(DialHz - 25_000, "the dongle sits below the dial, clear of its DC spike");
         input.DialHz.Should().Be(DialHz);
 
-        // The default 100 ms of settling after the settings is thrown away, so lead with it.
-        server.Send(new byte[2 * Rate / 10]);
+        // What the default settling throws away after the settings (two of rtl_tcp's 256 KiB
+        // transfers, more than 100 ms at this rate) is led with, so the burst is all heard.
+        server.Send(new byte[2 * 262_144]);
         server.Send(dongle);
 
         float[] heard = ReadSeconds(input, sim.Rate, (double)dongle.Length / 2 / Rate);

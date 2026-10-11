@@ -136,8 +136,11 @@ public sealed class RtlTcpAudioInput : IAudioInput, IReceiverTuner, IDisposable
             return reaches;
         }
 
-        double offset = dialHz - _source.TargetCentreHz;
-        if (reaches && Math.Abs(offset) >= _dcClearHz / 2)
+        // The channel's answer is against where the source is now; with a retune of the source
+        // still on its way that is not where it will be, so the source is retuned again.
+        double target = _source.TargetCentreHz;
+        double offset = dialHz - target;
+        if (reaches && target == _source.CentreFrequencyHz && Math.Abs(offset) >= _dcClearHz / 2)
         {
             return true;
         }

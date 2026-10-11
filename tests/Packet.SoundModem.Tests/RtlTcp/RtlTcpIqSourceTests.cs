@@ -22,6 +22,7 @@ public sealed class RtlTcpIqSourceTests
         TunerGainDb = 29.6,
         FrequencyCorrectionPpm = -12,
         RetuneSettle = TimeSpan.FromMilliseconds(1),
+        RetuneDiscardFloorBytes = 0,
         WatchProfile = false,
         Journal = _journal.Enqueue,
     };
@@ -148,7 +149,7 @@ public sealed class RtlTcpIqSourceTests
         using var server = new FakeRtlTcpServer();
         using var source = new RtlTcpIqSource(server.Endpoint, ReadOnly() with
         {
-            NoDataTimeout = TimeSpan.FromMilliseconds(300),
+            NoDataTimeout = TimeSpan.FromSeconds(1),
             ReconnectDelay = TimeSpan.FromMilliseconds(20),
         });
         await source.OpenAsync(CancellationToken.None);
@@ -162,8 +163,8 @@ public sealed class RtlTcpIqSourceTests
         await after;
 
         _journal.Should().Contain(l => l.Contains("sent nothing for", StringComparison.Ordinal));
-        source.Reconnects.Should().Be(1);
-        source.SamplesLost.Should().BeGreaterThan(Rate / 10, "at least 300 ms went missing at 250 kS/s");
+        source.Reconnects.Should().BeGreaterThanOrEqualTo(1);
+        source.SamplesLost.Should().BeGreaterThan(Rate, "at least a second went missing at 250 kS/s");
     }
 
     [Fact]
@@ -188,9 +189,37 @@ public sealed class RtlTcpIqSourceTests
         int got = await Task.Run(() => source.Read(new float[64])).WaitAsync(TimeSpan.FromSeconds(20));
 
         got.Should().Be(0, "a source that has given up is closing");
-        lost.Should().ContainSingle().Which.Should().Contain("unreachable");
+        lost.Should().ContainSingle().Which.Should().Contain("delivered nothing").And.Contain("Connection refused");
         source.Connected.Should().BeFalse();
         source.SessionLive.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task A_Server_That_Takes_The_Connection_And_Sends_Nothing_Is_Given_Up_On_Without_A_Flood()
+    {
+        using var server = new FakeRtlTcpServer();
+        using var source = new RtlTcpIqSource(server.Endpoint, ReadOnly() with
+        {
+            ReconnectDelay = TimeSpan.FromMilliseconds(20),
+            ReconnectDelayCap = TimeSpan.FromMilliseconds(200),
+            GiveUpAfter = TimeSpan.FromSeconds(1.5),
+        });
+        var lost = new ConcurrentQueue<string>();
+        source.Lost += lost.Enqueue;
+        await source.OpenAsync(CancellationToken.None);
+        server.WaitForConnections(1);
+        server.Send(Ramp(10));
+        ReadAtLeast(source, 10);
+
+        // From now on every connection is taken, given a header, and closed at once.
+        server.CloseOnAccept = true;
+        server.DropClient();
+        int got = await Task.Run(() => source.Read(new float[64])).WaitAsync(TimeSpan.FromSeconds(20));
+
+        got.Should().Be(0);
+        lost.Should().ContainSingle().Which.Should().Contain("delivered nothing");
+        server.Connections.Should().BeLessThan(20, "a server that accepts and drops is retried with a growing wait, not hammered");
+        source.Read(new float[64]).Should().Be(0, "a source that has given up stays closed");
     }
 
     [Fact]
