@@ -226,6 +226,8 @@ public sealed class IqReceiver : IDisposable
         }
 
         got &= ~1;
+        // A gap reported with a retune is measured at the rate before it: the interface does not
+        // say which tuning the lost samples belonged to, and the old one is where the stream was.
         int lostRate = _rate;
         long generation = _source.TuningGeneration;
         long lost = _source.SamplesLost;
@@ -345,8 +347,10 @@ public sealed class IqReceiver : IDisposable
         _options.Journal?.Invoke($"iq: the source retuned to {where} at {rate} S/s; every channel's filters restarted");
         foreach (IqReceiverChannel channel in _channels)
         {
-            channel.Place(_coarse, centre, rebuild: rateMoved);
+            // Counted before the audio that marks it, so the station's loss counter moves with the
+            // block the discontinuity is in, not the one after.
             channel.NoteDiscontinuity();
+            channel.Place(_coarse, centre, rebuild: rateMoved);
         }
     }
 
@@ -367,11 +371,12 @@ public sealed class IqReceiver : IDisposable
         {
             if (!alreadyRestarted)
             {
+                // Counted first, as for a retune; once per block when both happen at once.
+                channel.NoteDiscontinuity();
                 channel.Restart();
             }
 
             channel.AppendSilence(marked, rate);
-            channel.NoteDiscontinuity();
         }
 
         if (_options.Journal is not Action<string> journal)

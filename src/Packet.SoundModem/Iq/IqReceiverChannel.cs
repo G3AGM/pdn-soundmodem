@@ -13,9 +13,10 @@ namespace Packet.SoundModem.Iq;
 /// came, which is what the station's receive loop expects of a device with nothing to say. Once
 /// the source has closed it returns what is left and then 0 at once.</para>
 /// <para><b>Tuning.</b> <see cref="TuneAsync"/> moves the channel's dial without touching the
-/// source: it is a new offset for the NCO, taken up at the next block. It answers false when the
-/// band the coarse stage keeps does not reach the dial, or the source does not say where it is
-/// tuned; the dial is remembered either way and heard as soon as a retune of the source brings it
+/// source: it is a new offset for the NCO, taken up at the next block. On a source that says where
+/// it is tuned the dial is an RF frequency; on one that does not, it is an offset from the centre,
+/// which is what <see cref="DialHz"/> reads as there. It answers false when the band the coarse
+/// stage keeps does not reach the dial; the dial is remembered either way and heard as soon as a retune of the source brings it
 /// in. Moving the source itself is the backend's business, behind its own device.</para>
 /// <para><b>Behind.</b> A consumer that stops draining loses the oldest audio rather than growing
 /// the buffer; the loss is counted in <see cref="DroppedSamples"/> and
@@ -54,6 +55,7 @@ public sealed class IqReceiverChannel : IAudioInput, IReceiverTuner
 
     // The chain. Built for one coarse rate; rebuilt only when that moves.
     private int _coarseRate;
+    private bool _stale;
     private ComplexRationalResampler? _resampler;
     private StreamingSsbDemodulator? _ssb;
     private StreamingFmDiscriminator? _fm;
@@ -185,7 +187,15 @@ public sealed class IqReceiverChannel : IAudioInput, IReceiverTuner
         {
             while (_count == 0)
             {
-                if (_ended || !Monitor.Wait(_gate, ReadWait))
+                if (_ended)
+                {
+                    // Still wait: the station's loop relies on an empty Read having waited, and
+                    // would spin a core on one that returned at once.
+                    Monitor.Wait(_gate, ReadWait);
+                    return 0;
+                }
+
+                if (!Monitor.Wait(_gate, ReadWait))
                 {
                     return 0;
                 }
@@ -215,7 +225,7 @@ public sealed class IqReceiverChannel : IAudioInput, IReceiverTuner
         lock (_tuneGate)
         {
             _requestedDialHz = dialHz;
-            return Task.FromResult(_centreHz != 0 && Reaches(dialHz - _centreHz, _protectedHz));
+            return Task.FromResult(Reaches(dialHz - _centreHz, _protectedHz));
         }
     }
 
@@ -227,7 +237,18 @@ public sealed class IqReceiverChannel : IAudioInput, IReceiverTuner
         {
             if (_requestedDialHz is double requested)
             {
-                _dialHz = requested;
+                // With the centre known the dial is an RF frequency and the channel is anchored to
+                // it; without, it can only be what DialHz reads as there, an offset.
+                if (centreHz != 0)
+                {
+                    _dialHz = requested;
+                }
+                else
+                {
+                    _dialHz = null;
+                    _offsetHz = requested;
+                }
+
                 _requestedDialHz = null;
             }
 
@@ -259,12 +280,30 @@ public sealed class IqReceiverChannel : IAudioInput, IReceiverTuner
             }
         }
 
-        if (rebuild || _resampler is null || coarse.OutputRate != _coarseRate)
+        // A muted channel is not built: the rate it was muted at may be one its filter cannot be
+        // designed for, and it is built when a retune brings it back.
+        _stale |= rebuild || _resampler is null || coarse.OutputRate != _coarseRate;
+        if (!Muted && _stale)
         {
-            Build(coarse);
+            try
+            {
+                Build(coarse);
+                _stale = false;
+            }
+            catch (ArgumentException ex)
+            {
+                lock (_tuneGate)
+                {
+                    Mute($"its filter cannot run on a {coarse.OutputRate} S/s stream ({ex.Message})");
+                }
+            }
         }
 
-        _phaseIncrement = 2.0 * Math.PI * _offsetHz / _coarseRate;
+        if (!Muted)
+        {
+            _phaseIncrement = 2.0 * Math.PI * _offsetHz / _coarseRate;
+        }
+
         Restart();
     }
 
@@ -331,8 +370,8 @@ public sealed class IqReceiverChannel : IAudioInput, IReceiverTuner
 
         if (tune)
         {
-            Place(coarse, centreHz, rebuild: false);
             NoteDiscontinuity();
+            Place(coarse, centreHz, rebuild: false);
             _journal?.Invoke(Muted
                 ? $"{_label}: tuned to {DialHz:F0} Hz, which the source's band does not reach; silent until it does"
                 : $"{_label}: tuned to {DialHz:F0} Hz, {_offsetHz:F0} Hz from the source's centre");
@@ -341,9 +380,12 @@ public sealed class IqReceiverChannel : IAudioInput, IReceiverTuner
         int frames = coarseIq.Length / 2;
         if (Muted)
         {
+            // The coarse stage's rate, not the chain's: a muted channel's chain may be built for a
+            // rate the source has since left.
+            int rate = coarse.OutputRate;
             long owed = (frames * (long)_dspRate) + _muteRemainder;
-            _muteRemainder = owed % _coarseRate;
-            PublishSilence(owed / _coarseRate);
+            _muteRemainder = owed % rate;
+            PublishSilence(owed / rate);
             return;
         }
 

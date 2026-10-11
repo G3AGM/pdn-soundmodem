@@ -292,6 +292,52 @@ public sealed class IqReceiverTests
     }
 
     [Fact]
+    public void A_Drop_To_A_Rate_The_Channel_Filter_Cannot_Run_At_Silences_It_Rather_Than_Stopping_The_Receiver()
+    {
+        // A 16 kHz IF needs more than a 12 kS/s stream; the receiver must carry on and the
+        // channel come back when the rate does.
+        (float[] b, byte[] frameB, SimModem sim) = Burst("afsk1200", seed: 31);
+        var journal = new List<string>();
+        var source = new ScriptedIqSource(
+        [
+            new(ComplexTone(240_000, 20_000, 24_000, 0.5f), 240_000),
+            new(ComplexTone(12_000, 0, 12_000, 0.5f), 12_000),
+            new(FmIq(b, sim.Rate, 240_000, 20_000, 3000), 240_000),
+        ]);
+        using var receiver = new IqReceiver(
+            source,
+            [new IqChannelSpec { OffsetHz = 20_000, Demodulation = IqDemodulation.Fm, FmIfBandwidthHz = 16_000 }],
+            new IqReceiverOptions { DspRate = 12_000, Journal = journal.Add });
+
+        float[] audio = IqSynth.Receive(receiver)[0];
+
+        receiver.Retunes.Should().Be(2);
+        journal.Should().Contain(l => l.Contains("silent"));
+        audio.AsSpan(1_200 + 100, 12_000 - 200).ToArray().Should().OnlyContain(v => v == 0f, "the muted second keeps its time");
+        sim.Decode(audio.AsSpan(1_200 + 12_000), frameB).Matched.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task On_A_Source_That_Does_Not_Say_Where_It_Is_Tuned_A_Dial_Is_An_Offset()
+    {
+        const int rate = 240_000;
+        (float[] b, byte[] frameB, SimModem sim) = Burst("afsk1200", seed: 33);
+        using var receiver = new IqReceiver(
+            new BufferIqSource(FmIq(b, sim.Rate, rate, -30_000, 3000), rate),
+            [IqChannelSpec.ForFmMode("afsk1200", 20_000)],
+            new IqReceiverOptions { DspRate = 12_000, CoverageHz = 40_000 });
+        IqReceiverChannel channel = receiver.Channels[0];
+        channel.DialHz.Should().Be(20_000, "with no centre the dial reads as the offset");
+
+        (await channel.TuneAsync(-30_000, CancellationToken.None)).Should().BeTrue();
+        float[] audio = IqSynth.Receive(receiver)[0];
+
+        channel.Muted.Should().BeFalse();
+        channel.OffsetHz.Should().Be(-30_000);
+        sim.Decode(audio, frameB).Matched.Should().BeTrue();
+    }
+
+    [Fact]
     public void A_Channel_Outside_The_Source_Band_Is_Refused_With_A_Reason()
     {
         Action build = () => new IqReceiver(
