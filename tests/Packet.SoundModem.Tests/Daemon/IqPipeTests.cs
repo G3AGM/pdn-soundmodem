@@ -388,13 +388,21 @@ public sealed class IqPipeTests : IDisposable
             source.Read(buffer);
         }
 
-        long before = GC.GetAllocatedBytesForCurrentThread();
-        for (int k = 0; k < 200; k++)
+        // Tiering can still be promoting methods on a loaded box, and a promotion can allocate on
+        // the thread that triggers it; steady state is the best of three stretches, not the first.
+        long least = long.MaxValue;
+        for (int attempt = 0; attempt < 3 && least > 0; attempt++)
         {
-            source.Read(buffer);
+            long before = GC.GetAllocatedBytesForCurrentThread();
+            for (int k = 0; k < 200; k++)
+            {
+                source.Read(buffer);
+            }
+
+            least = Math.Min(least, GC.GetAllocatedBytesForCurrentThread() - before);
         }
 
-        (GC.GetAllocatedBytesForCurrentThread() - before).Should().Be(0);
+        least.Should().Be(0);
     }
 
     // ---- through the front end and the station ----
