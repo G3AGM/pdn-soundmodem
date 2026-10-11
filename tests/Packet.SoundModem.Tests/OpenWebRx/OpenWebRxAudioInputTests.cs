@@ -177,6 +177,91 @@ public sealed class OpenWebRxAudioInputTests : IAsyncDisposable
         _journal.Should().Contain(l => l.Contains("does not reach 14.100000 MHz", StringComparison.Ordinal));
     }
 
+    private static byte[] Pcm(int count)
+    {
+        short[] tone = Tone(count);
+        byte[] pcm = new byte[tone.Length * 2];
+        Buffer.BlockCopy(tone, 0, pcm, 0, pcm.Length);
+        return pcm;
+    }
+
+    [Fact]
+    public async Task A_Retune_Marks_The_First_Audio_After_It_And_Loses_Nothing()
+    {
+        Task<OpenWebRxAudioInput> opening = OpenAsync(Tuning());
+        FakeReceiver receiver = await NextReceiverAsync();
+        await receiver.GreetAsync(compression: "none");
+        using OpenWebRxAudioInput input = await opening;
+
+        await receiver.SendAudioAsync(Pcm(1200));
+        ReadAtLeast(input, 1200).Should().HaveCount(1200);
+        input.Discontinuities.Should().Be(0, "starting the demodulator is not a hole");
+
+        (await input.TuneAsync(7_050_000, TestContext.Current.CancellationToken)).Should().BeTrue();
+        await receiver.ReceiveTextAsync();
+        input.Discontinuities.Should().Be(0, "the count is as of the audio handed out, and none has been since");
+
+        await receiver.SendAudioAsync(Pcm(1200));
+        ReadAtLeast(input, 1200).Should().HaveCount(1200);
+        input.Discontinuities.Should().Be(1, "the audio after the retune is another signal");
+
+        await receiver.SendAudioAsync(Pcm(1200));
+        ReadAtLeast(input, 1200).Should().HaveCount(1200);
+        input.Discontinuities.Should().Be(1, "only the first audio after it follows the move");
+
+        (await input.TuneAsync(7_050_000, TestContext.Current.CancellationToken)).Should().BeTrue();
+        await receiver.SendAudioAsync(Pcm(1200));
+        ReadAtLeast(input, 1200).Should().HaveCount(1200);
+        input.Discontinuities.Should().Be(1, "a retune to the dial it is already on moves nothing");
+        input.DroppedSamples.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task A_Retune_Off_The_Band_And_Back_Is_One_Mark()
+    {
+        Task<OpenWebRxAudioInput> opening = OpenAsync(Tuning());
+        FakeReceiver receiver = await NextReceiverAsync();
+        await receiver.GreetAsync(compression: "none");
+        using OpenWebRxAudioInput input = await opening;
+
+        await receiver.SendAudioAsync(Pcm(1200));
+        ReadAtLeast(input, 1200).Should().HaveCount(1200);
+
+        (await input.TuneAsync(14_100_000, TestContext.Current.CancellationToken)).Should().BeFalse();
+        await receiver.SendAudioAsync(Pcm(1200));
+        // Audio from off the dial is read past, and the input says it is quiet on purpose.
+        await WaitForAsync(() => !input.SessionLive);
+        (await input.TuneAsync(7_040_000, TestContext.Current.CancellationToken)).Should().BeTrue();
+        await receiver.ReceiveTextAsync();
+        await receiver.SendAudioAsync(Pcm(1200));
+
+        ReadAtLeast(input, 1200).Should().HaveCount(1200, "the audio from off the dial was not delivered");
+        input.Discontinuities.Should().Be(1);
+        input.DroppedSamples.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task The_Receiver_Reporting_A_New_Centre_Marks_The_First_Audio_After_It()
+    {
+        Task<OpenWebRxAudioInput> opening = OpenAsync(Tuning());
+        FakeReceiver receiver = await NextReceiverAsync();
+        await receiver.GreetAsync(compression: "none");
+        using OpenWebRxAudioInput input = await opening;
+
+        await receiver.SendAudioAsync(Pcm(1200));
+        ReadAtLeast(input, 1200).Should().HaveCount(1200);
+
+        // Somebody else listening chose another 40 m profile with a different centre.
+        await receiver.SendTextAsync(FakeReceiver.Config(7_000_000));
+        string placed = await receiver.ReceiveTextAsync();
+        JsonNode.Parse(placed)!["params"]!["offset_freq"]!.GetValue<long>().Should().Be(48_800);
+
+        await receiver.SendAudioAsync(Pcm(1200));
+        ReadAtLeast(input, 1200).Should().HaveCount(1200);
+        input.Discontinuities.Should().Be(1);
+        input.DroppedSamples.Should().Be(0);
+    }
+
     [Fact]
     public async Task A_Busy_Receiver_Lets_The_Station_Come_Up_And_Be_Asked_Again_Later()
     {

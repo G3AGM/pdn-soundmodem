@@ -254,6 +254,59 @@ public class OpenWebRxConversationTests
     }
 
     [Fact]
+    public void Placing_And_Starting_The_Demodulator_Is_Not_A_Move()
+    {
+        var conversation = new OpenWebRxConversation(Usb);
+        conversation.OnText(Config(centre: 7_100_000, rate: 2_400_000, sdr: "rtl", profile: "40m"));
+        conversation.OnText(Profiles);
+        conversation.OnText(Config(centre: 7_100_000, rate: 2_400_000, sdr: "rtl", profile: "40m"));
+
+        conversation.Listening.Should().BeTrue();
+        conversation.Moves.Should().Be(0, "the session's own setting up is not a hole in its audio");
+    }
+
+    [Fact]
+    public void A_Retune_That_Moves_The_Demodulator_Is_A_Move_And_One_That_Does_Not_Is_Not()
+    {
+        var conversation = new OpenWebRxConversation(Usb);
+        conversation.OnText(Config(centre: 7_100_000, rate: 2_400_000));
+
+        conversation.Retune(Usb with { FrequencyHz = 7_050_000 }).Send.Should().ContainSingle();
+        conversation.Moves.Should().Be(1);
+
+        conversation.Retune(Usb with { FrequencyHz = 7_050_000 }).Send.Should().BeEmpty();
+        conversation.Moves.Should().Be(1, "a retune to where it already is moves nothing");
+
+        conversation.Retune(Usb with { FrequencyHz = 14_100_000 }).Send.Should().BeEmpty();
+        conversation.Moves.Should().Be(2, "the band does not reach the new dial, so the audio stops");
+
+        conversation.Retune(Usb with { FrequencyHz = 7_040_000 }).Send.Should().ContainSingle();
+        conversation.Moves.Should().Be(3);
+        conversation.Listening.Should().BeTrue();
+    }
+
+    [Fact]
+    public void The_Receiver_Moving_Under_A_Started_Demodulator_Is_A_Move()
+    {
+        var conversation = new OpenWebRxConversation(Usb);
+        conversation.OnText(Config(centre: 7_100_000, rate: 2_400_000, sdr: "rtl", profile: "40m"));
+
+        conversation.OnText(Config(centre: 7_000_000, rate: 2_400_000)).Send.Should().ContainSingle(
+            "the demodulator is placed again on the new centre");
+        conversation.Moves.Should().Be(1);
+
+        conversation.OnText(Config(centre: 7_000_000, rate: 2_048_000)).Send.Should().BeEmpty(
+            "the offset from the centre has not changed");
+        conversation.Moves.Should().Be(2, "the receiver rebuilt the chain at a new rate all the same");
+
+        conversation.OnText(Config(centre: 7_000_000, rate: 2_048_000)).Send.Should().BeEmpty();
+        conversation.Moves.Should().Be(2, "the same config again moves nothing");
+
+        conversation.OnText(Config(centre: 7_000_000, rate: 2_048_000, sdr: "airspy", profile: "40m"));
+        conversation.Moves.Should().Be(3, "a new SDR is a new demodulator");
+    }
+
+    [Fact]
     public void A_Busy_Receiver_And_A_Broken_One_Are_Told_Apart()
     {
         var busy = new OpenWebRxConversation(Usb);

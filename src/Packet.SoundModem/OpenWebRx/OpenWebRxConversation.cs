@@ -79,6 +79,15 @@ internal sealed class OpenWebRxConversation
     /// <summary>The receiver's band does not reach the wanted dial.</summary>
     public bool OutOfBand => _outOfBand;
 
+    /// <summary>
+    /// A running count of the times what the started demodulator hears was moved under it: a
+    /// retune of ours that moves the demodulator or changes its passband or mode, the receiver
+    /// reporting a new centre, sample rate or SDR (a profile change by anyone listening), and the
+    /// band moving off the dial, so that the audio after it is not the signal before it. Placing
+    /// and starting the demodulator at the start of a session is not a move.
+    /// </summary>
+    public long Moves { get; private set; }
+
     /// <summary>Why the server will not serve this client now, once it has said.</summary>
     public string? Refusal { get; private set; }
 
@@ -131,6 +140,11 @@ internal sealed class OpenWebRxConversation
                 {
                     // The server builds a fresh, unstarted demodulator for another SDR, as when one
                     // fails; the browser starts its own again, and so does this.
+                    if (_started)
+                    {
+                        Moves++;
+                    }
+
                     _started = false;
                     _sentOffset = null;
                 }
@@ -257,6 +271,11 @@ internal sealed class OpenWebRxConversation
                     + $"{Mhz(_tuning.FrequencyHz)} MHz; listening there resumes when it does");
             }
 
+            if (_started && !_outOfBand)
+            {
+                Moves++;
+            }
+
             _outOfBand = true;
             return new(send, lines);
         }
@@ -269,9 +288,20 @@ internal sealed class OpenWebRxConversation
 
         if (offset != _sentOffset || _tuning != _sentTuning)
         {
+            if (_started)
+            {
+                Moves++;
+            }
+
             send.Add(OpenWebRxProtocol.DspParameters(offset, _tuning));
             _sentOffset = offset;
             _sentTuning = _tuning;
+        }
+        else if (moved && _started)
+        {
+            // A new sample rate on the same centre leaves the offset where it was, but the
+            // receiver has rebuilt the chain the audio comes through.
+            Moves++;
         }
 
         if (!_started)
