@@ -120,7 +120,11 @@ internal abstract class StationDevice
 /// <param name="OpenWebRx">The <c>"openwebrx"</c> section, or null.</param>
 /// <param name="IqCard">The <c>"iqCard"</c> section, or null.</param>
 internal sealed record DeviceSettings(
-    UberSdrConfig? UberSdr, bool HasWaterfall, OpenWebRxConfig? OpenWebRx = null, IqCardConfig? IqCard = null);
+    UberSdrConfig? UberSdr, bool HasWaterfall, OpenWebRxConfig? OpenWebRx = null, IqCardConfig? IqCard = null)
+{
+    /// <summary>The <c>"rtltcp"</c> section, or null.</summary>
+    public RtlTcpConfig? RtlTcp { get; init; }
+}
 
 /// <summary>
 /// What a device needs from the rest of start-up to open itself. Settled by the time the device

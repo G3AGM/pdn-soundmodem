@@ -95,6 +95,30 @@ internal static class IqSynth
         }
     }
 
+    /// <summary>
+    /// Puts a stream through what an RTL dongle and rtl_tcp do to it: scaled so the RMS on each
+    /// axis is <paramref name="rmsOfFullScale"/> of full scale (the dongle's gain), clipped and
+    /// rounded to unsigned bytes (its 8-bit converter), and turned back to floats with
+    /// <see cref="Packet.SoundModem.RtlTcp.RtlTcpProtocol.Convert"/>, as the rtl_tcp source does.
+    /// </summary>
+    public static void ThroughDongleBytes(Span<float> iq, double rmsOfFullScale)
+    {
+        double sum = 0;
+        foreach (float v in iq)
+        {
+            sum += v * (double)v;
+        }
+
+        double scale = rmsOfFullScale / Math.Sqrt(sum / Math.Max(1, iq.Length));
+        var bytes = new byte[iq.Length];
+        for (int k = 0; k < iq.Length; k++)
+        {
+            bytes[k] = (byte)Math.Clamp(Math.Round((iq[k] * scale * 127.5) + 127.5), 0, 255);
+        }
+
+        Packet.SoundModem.RtlTcp.RtlTcpProtocol.Convert(bytes, iq);
+    }
+
     /// <summary>Pumps a receiver over a whole source, draining every channel as it goes, and
     /// returns each channel's audio.</summary>
     public static float[][] Receive(IqReceiver receiver)
@@ -172,9 +196,13 @@ internal static class IqFrontEndBench
     /// <see cref="IqChannelSpec.ForFmMode"/> gives (the mode's published occupancy). The CNR and the
     /// reference's pre-filter stay at the channel spacing's IF either way, as the link model states
     /// them.</param>
+    /// <param name="dongleRms">Null for float IQ. Otherwise the front end hears the stream as an
+    /// RTL dongle would send it over rtl_tcp: scaled so its RMS on each axis is this fraction of
+    /// full scale, cut to unsigned bytes, and turned back to floats by the rtl_tcp source's own
+    /// table. Front end only.</param>
     public static int RunPoint(
         string mode, double cnrDb, IqFmArm arm, int bursts, int sourceRate, int firstSeed = 1, int workers = 4,
-        double? frontEndIfHz = null)
+        double? frontEndIfHz = null, double? dongleRms = null)
     {
         FmModeProfile profile = FmModeProfiles.For(mode)
             ?? throw new ArgumentException($"'{mode}' is not an FM mode", nameof(mode));
@@ -184,14 +212,14 @@ internal static class IqFrontEndBench
         Parallel.For(
             0, bursts, new ParallelOptions { MaxDegreeOfParallelism = Math.Max(1, workers) },
             () => 0,
-            (b, _, local) => local + (RunBurst(mode, cnrDb, arm, sourceRate, deviation, ifBandwidth, frontEndIfHz, firstSeed + b) ? 1 : 0),
+            (b, _, local) => local + (RunBurst(mode, cnrDb, arm, sourceRate, deviation, ifBandwidth, frontEndIfHz, dongleRms, firstSeed + b) ? 1 : 0),
             local => Interlocked.Add(ref successes, local));
         return successes;
     }
 
     private static bool RunBurst(
         string mode, double cnrDb, IqFmArm arm, int sourceRate, double deviation, double ifBandwidth,
-        double? frontEndIfHz, int seed)
+        double? frontEndIfHz, double? dongleRms, int seed)
     {
         var sim = new SimModem(mode);
         byte[] frame = SimModem.Frame(60, seed);
@@ -219,6 +247,10 @@ internal static class IqFrontEndBench
         // CNR in the IF bandwidth: carrier power over the noise power that falls in it.
         double noisePower = Amplitude * Amplitude * rate / (ifBandwidth * Math.Pow(10, cnrDb / 10));
         IqSynth.AddNoise(iq, noisePower, seed + 7_000_000);
+        if (dongleRms is double rms && arm == IqFmArm.FrontEnd)
+        {
+            IqSynth.ThroughDongleBytes(iq, rms);
+        }
 
         float[] heard;
         if (arm == IqFmArm.Reference)

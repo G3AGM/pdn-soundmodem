@@ -19,6 +19,7 @@ By the end of this page you will know which `device` string and which `ptt` bloc
 | A public UberSDR web receiver | `ubersdr:m9psy-1.instance.ubersdr.org` |
 | A public OpenWebRX or OpenWebRX+ receiver | `openwebrx:http://sdr.example.org:8073/` |
 | A radio's IQ output into a stereo sound card (Xiegu G90, SoftRock), receive only | `iqcard:plughw:CARD=Device,DEV=0`; see [hardware/iq-sound-card.md](hardware/iq-sound-card.md) |
+| An RTL-SDR dongle behind `rtl_tcp`, or your own OpenWebRX's rtl_tcp-compatible port | `rtltcp:pi.local:1234` |
 | Two FIFOs standing in for a card | `pipe:/tmp/in,/tmp/out` |
 | Nothing at all | `null` |
 
@@ -202,6 +203,47 @@ Without `rfFrequency` the dial is left where you put it.
 
 Every key is in [`rig`](reference/config.md#rig).
 
+## An RTL-SDR over the network
+
+An RTL-SDR dongle on a small box at the antenna can stream its raw IQ over the LAN with `rtl_tcp`, and the station demodulates it on a machine with the CPU to spare. Point `device` at the server:
+
+```json
+{
+  "device": "rtltcp:pi.local",
+  "sideband": "fm",
+  "modems": [ { "mode": "afsk1200", "subChannel": 0, "rfFrequency": 144800000 } ]
+}
+```
+
+On the box with the dongle, start the server listening on the LAN (it listens on 127.0.0.1 unless told otherwise):
+
+```sh
+rtl_tcp -a 0.0.0.0 -p 1234
+```
+
+- The station tunes the dongle itself: 25 kHz below the band plan's dial, so the dongle's DC spike stays out of the channel, at 1.024 MS/s unless `"rtltcp"."sampleRate"` says otherwise. The tuner's own gain is used unless `"gainDb"` sets one, and `"ppm"` corrects the dongle's crystal.
+- The filter and the demodulator are this station's, not the dongle's: USB, LSB or FM, from the band plan's sideband.
+- It is receive only, as a web receiver is: no `ptt`, no `rig`, no transmitter test.
+- rtl_tcp serves one client at a time. While this station is connected nothing else can use the dongle.
+- If the server goes away or goes quiet for five seconds, the station reconnects and marks the time it was gone as a gap in the audio. After five minutes without it, the service restarts.
+- Every key is in [`rtltcp`](reference/config.md#rtltcp).
+
+### OpenWebRX's rtl_tcp-compatible port
+
+An OpenWebRX or OpenWebRX+ you run can republish its SDR's raw IQ on an rtl_tcp-compatible port, so the same SDR serves the web page and this station. That port takes no orders: it ignores commands, cannot say which profile it is on, and sends every SDR as 8 bits a sample. So the station is told the profile and never sends anything:
+
+```json
+{
+  "device": "rtltcp:owrx.local:4950",
+  "rtltcp": { "readOnly": true, "centreFrequency": 144900000, "sampleRate": 2400000 }
+}
+```
+
+- In the SDR device's settings, give it an rtl_tcp-compatible port, and turn on keeping the device running at all times; otherwise the port has nothing to send while nobody has the page open.
+- Pin the profile. `centreFrequency` and `sampleRate` have to be what the profile is set to, and the dial has to fall inside its band. Give the device one profile, or make sure nobody switches it.
+- If the profile is switched anyway, the station cannot be told. A switch to a different sample rate is caught within about fifteen seconds: the samples are dropped until the rate is right again, and the journal says so. A switch to another band at the same rate cannot be caught for certain; a sudden lasting change in the stream is said in the journal as a warning, and the station goes on decoding whatever the SDR now hears.
+- 8 bits a sample is plenty with the SDR's gain set so the noise sits well clear of the bottom: in simulation it costs nothing measurable against float IQ.
+
 ## A web receiver
 
 With no antenna at all, point `device` at a public UberSDR web receiver and the station receives over the internet. It is receive only: no `ptt`, no transmitter test, and frames sent to it over KISS are dropped. Every modem needs an `rfFrequency`, or `dialFrequency` must be set, so the receiver knows where to tune. [09-web-receivers.md](09-web-receivers.md) covers the rest.
@@ -223,7 +265,9 @@ You want one `audio:` line naming your device, and one `ptt:` line if you config
 
 `cannot open the cm108 PTT device "..."` with `Access to the path '/dev/hidraw0' is denied.` under it means the udev rule is missing or has the wrong IDs. Add it, replug, restart.
 
-`--device flex: keys the radio itself; remove the conflicting --ptt (serial:/cm108:)` means what it says. Delete the `ptt` section. The same goes for `ubersdr:` and `openwebrx:`, which have no transmitter.
+`--device flex: keys the radio itself; remove the conflicting --ptt (serial:/cm108:)` means what it says. Delete the `ptt` section. The same goes for `ubersdr:`, `openwebrx:` and `rtltcp:`, which have no transmitter.
+
+`cannot listen through "rtltcp:..."` means the rtl_tcp server is not running, is listening only on its own machine (start it with `-a 0.0.0.0`), or another client has it. The service keeps retrying.
 
 `rig: WARNING - cannot reach rigctld at ...` means rigctld is not running, or is on another port. Start it, and the station picks it up within half a minute.
 
@@ -238,4 +282,4 @@ Anything else in the journal is in [12-troubleshooting.md](12-troubleshooting.md
 - [07-station-page.md](07-station-page.md) for the mixer, the meters and the transmitter test in the browser.
 - [08-hf.md](08-hf.md) for SSB, band plans and where the dial goes.
 - [hardware/tait-tm8100-cm108.md](hardware/tait-tm8100-cm108.md) for wiring an interface to a TM8100.
-- [reference/config.md](reference/config.md) for `device`, `ptt`, `alsa`, `flex`, `rig` and `ubersdr` key by key.
+- [reference/config.md](reference/config.md) for `device`, `ptt`, `alsa`, `flex`, `rig`, `ubersdr` and `rtltcp` key by key.

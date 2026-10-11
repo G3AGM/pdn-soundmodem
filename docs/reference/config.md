@@ -30,7 +30,7 @@ configuration error in /etc/pdn-soundmodem/soundmodem.json
   Every setting is documented at https://github.com/packet-net/pdn-soundmodem/blob/main/docs/reference/config.md
 ```
 
-The same frame carries `no such file: <path>`, `no such directory: <dir>`, `permission denied reading the file`, `the file is empty`, ``the file contains only `null` - there is nothing to configure from`` and `not valid JSON - line L, position P: <detail>` (counted from 1, as an editor does). The frame is used for every refusal raised while the file is read, which is everything `DaemonConfig` checks: the file-level errors above, `bind`, the port claims, sub-channels and the `rfFrequency` rules, `txTest`, `modemPlugins`, `alsa`, `flex.transmitFilterHighHz`, `rig`, `deadFeed`, the sideband kinds, `monitor` and `publish`, plus the `publish.audioRate` divisor check, which waits for the modems. Refusals raised later in start-up are one or two bare lines on stderr with exit 2 and no recovery text: an unknown mode and the mode rules under `modems`, every `identify` refusal, `ptt`, `captureRate`, `ubersdr`, `openwebrx`, `flex.txPowerWatts` and the sideband contradiction, ARDOP given twice via `--ardop`, the band plan, the page's port and settings, `api`, `frameLog`, `survey`, `rawCapture`, and a monitor's own start-up checks. Where a section below says a line is a warning, start-up continues.
+The same frame carries `no such file: <path>`, `no such directory: <dir>`, `permission denied reading the file`, `the file is empty`, ``the file contains only `null` - there is nothing to configure from`` and `not valid JSON - line L, position P: <detail>` (counted from 1, as an editor does). The frame is used for every refusal raised while the file is read, which is everything `DaemonConfig` checks: the file-level errors above, `bind`, the port claims, sub-channels and the `rfFrequency` rules, `txTest`, `modemPlugins`, `alsa`, `flex.transmitFilterHighHz`, `rig`, `deadFeed`, the sideband kinds, `monitor` and `publish`, plus the `publish.audioRate` divisor check, which waits for the modems. Refusals raised later in start-up are one or two bare lines on stderr with exit 2 and no recovery text: an unknown mode and the mode rules under `modems`, every `identify` refusal, `ptt`, `captureRate`, `ubersdr`, `openwebrx`, `rtltcp`, `flex.txPowerWatts` and the sideband contradiction, ARDOP given twice via `--ardop`, the band plan, the page's port and settings, `api`, `frameLog`, `survey`, `rawCapture`, and a monitor's own start-up checks. Where a section below says a line is a warning, start-up continues.
 
 Exit status 1 is different: hardware the file names but the machine does not have (a sound card that has not enumerated, a `/dev/hidraw0` that is not there, a radio still booting) exits 1 with a message naming the key and the file, and the service keeps retrying every five seconds.
 
@@ -40,7 +40,7 @@ In the order `DaemonConfig` declares them. `sideband`, `dialFrequency` and each 
 
 | Key | Type | Default | What it is |
 |---|---|---|---|
-| `device` | string | `"default"` | The audio input and output: an ALSA name, `null`, `pipe:`, `flex:`, `ubersdr:` or `openwebrx:`. |
+| `device` | string | `"default"` | The audio input and output: an ALSA name, `null`, `pipe:`, `flex:`, `ubersdr:`, `openwebrx:` or `rtltcp:`. |
 | `captureDevice` | string | absent: `device` | The sound card to receive from, when it is not `device`. See [Two cards](#two-cards-capturedevice-and-playbackdevice). |
 | `playbackDevice` | string | absent: `device` | The sound card to transmit through, when it is not `device`. See [Two cards](#two-cards-capturedevice-and-playbackdevice). |
 | `captureRate` | int | `48000` | ALSA capture and playback rate in Hz; the modem decimates to its DSP rate. |
@@ -64,6 +64,7 @@ In the order `DaemonConfig` declares them. `sideband`, `dialFrequency` and each 
 | `mailcast` | object | absent: off | The built-in pdn-mailcast receiver: hear GB7RDG's bulletins on 40 m and forward them into your BBS. |
 | `ubersdr` | object | absent: defaults | Stream parameters for a public UberSDR web receiver. |
 | `openwebrx` | object | absent: defaults | Stream parameters for a public OpenWebRX or OpenWebRX+ receiver. |
+| `rtltcp` | object | absent: defaults | Settings for an RTL-SDR behind rtl_tcp, or OpenWebRX's rtl_tcp-compatible port. |
 | `waterfall` | object | absent: no page | The station page: spectrum, waterfall, frames, links, and the HTTP listener that `api` and `metrics` share. |
 | `monitor` | object | absent: not a monitor | Turns the process into a monitor site fronting many web receivers. Exclusive with `device`. |
 | `publish` | object | absent: publishes nothing | Dials out to a monitor site and offers this station on it. Exclusive with `monitor`. |
@@ -91,9 +92,10 @@ In the order `DaemonConfig` declares them. `sideband`, `dialFrequency` and each 
 | `ubersdr:<instance>` | A public UberSDR web receiver's IQ stream, receive only. A host, a `host:port`, or the `https://` URL you would open in a browser. |
 | `openwebrx:<url>` | A public OpenWebRX or OpenWebRX+ receiver's demodulated audio, receive only. The URL you would open in a browser, path included; a bare host or `host:port` is taken as `http` on port 8073. |
 | `iqcard:<alsa device>` | IQ on a sound card's left and right inputs (a Xiegu G90, a SoftRock), receive only. See [`iqCard`](#iqcard). |
+| `rtltcp:<host>[:<port>]` | An rtl_tcp server's raw IQ, demodulated here, receive only: an RTL-SDR dongle behind `rtl_tcp`, or OpenWebRX's rtl_tcp-compatible port. The port defaults to 1234; an IPv6 address goes in brackets. |
 
 - `captureRate` applies to ALSA and pipe devices only. It must be a multiple of the channel's DSP rate (12000, or 48000 when any 48 kHz mode is configured), or start-up refuses with `--capture-rate must be a multiple of N`. A pipe's own rate has the same rule: `pipe rate N is not a multiple of the channel's N Hz`.
-- A `flex:`, `ubersdr:` or `openwebrx:` device provides its own clock; `captureRate` is ignored. So does `iqcard:`, whose rate is `iqCard`.`sampleRate`.
+- A `flex:`, `ubersdr:`, `openwebrx:` or `rtltcp:` device provides its own clock; `captureRate` is ignored. So does `iqcard:`, whose rate is `iqCard`.`sampleRate`.
 - A device that will not open exits 1 with a message naming the key and the file, and the service retries.
 
 ### Two cards: `captureDevice` and `playbackDevice`
@@ -252,7 +254,7 @@ The short form: every packet modem in `modems` goes behind port 8120, the first 
 
 - Omit the whole section for a radio keyed by VOX, or one that has no keying line. A FlexRadio keys itself and a web receiver has no transmitter.
 - `"rigctld"` takes no other key here; it keys through the `rig` section's rigctld and is refused without one (`"ptt": {"type": "rigctld"} keys the radio through the "rig" section's rigctld, and this file has no "rig" section`). It is config-file only; the `--ptt` flag has no form for it.
-- Refused: a `type` other than `serial`, `cm108` or `rigctld` (`unknown ptt type 'X'`); any `ptt` with a `flex:` device (`--device flex: keys the radio itself; remove the conflicting --ptt (serial:/cm108:)`); any `ptt` with a `ubersdr:` or `openwebrx:` device (`--device ubersdr: is a receive-only station ... Remove "ptt".`).
+- Refused: a `type` other than `serial`, `cm108` or `rigctld` (`unknown ptt type 'X'`); any `ptt` with a `flex:` device (`--device flex: keys the radio itself; remove the conflicting --ptt (serial:/cm108:)`); any `ptt` with a `ubersdr:`, `openwebrx:` or `rtltcp:` device (`--device ubersdr: is a receive-only station ... Remove "ptt".`).
 - A device that cannot be opened exits 1, with the file, the key, an `ls` to run and the udev note for `/dev/hidraw*`, and the service retries. The [`--ptt` flag](command-line.md#station-flags) replaces this section.
 - Without a `ptt` the transmitter test is refused: `tx test: unavailable - no "ptt" is configured, so this daemon does not key the radio`.
 
@@ -411,7 +413,7 @@ A test asked for through `POST /api/txtest` can follow its tone with a channel-s
 { "rig": { "rigctld": "127.0.0.1:4532", "mode": "PKTUSB" }, "ptt": { "type": "rigctld" } }
 ```
 
-A radio controlled through Hamlib's `rigctld`, for any device but `flex:`, `ubersdr:` and `openwebrx:`. Absent, nothing talks to a rig and the station is as it always was.
+A radio controlled through Hamlib's `rigctld`, for any device but `flex:`, `ubersdr:`, `openwebrx:` and `rtltcp:`. Absent, nothing talks to a rig and the station is as it always was.
 
 | Key | Type | Default | What it is |
 |---|---|---|---|
@@ -429,7 +431,7 @@ A radio controlled through Hamlib's `rigctld`, for any device but `flex:`, `uber
 - rigctld started with `--vfo` is not supported: the station says so (`rigctld was started with --vfo, which this station does not speak`) and keeps retrying. Start it without `--vfo`.
 - With `ptt` `rigctld`, the `T 1` round trip over CAT (often 20 to 100 ms, more on a slow serial link) comes out of TXDELAY, because the preamble starts as soon as rigctld answers. Allow for it if the far end misses the start of your frames.
 - A `T 1` that fails is followed at once by `T 0`. An unkey rigctld does not confirm is retried every second with a warning each time, and nothing is keyed or retuned until it goes.
-- Refused: `rig` with a `flex:`, `ubersdr:` or `openwebrx:` device; a `rigctld` that is not `host:port`; a `mode` outside `USB`, `PKTUSB`, `LSB`, `PKTLSB`, `FM`, `FMN`, `PKTFM`, `PKTFMN` (other Hamlib modes are for tuning windows only), or one that disagrees with `sideband`; a `passbandHz` below 0 or above 20000.
+- Refused: `rig` with a `flex:`, `ubersdr:`, `openwebrx:` or `rtltcp:` device; a `rigctld` that is not `host:port`; a `mode` outside `USB`, `PKTUSB`, `LSB`, `PKTLSB`, `FM`, `FMN`, `PKTFM`, `PKTFMN` (other Hamlib modes are for tuning windows only), or one that disagrees with `sideband`; a `passbandHz` below 0 or above 20000.
 - `POST /api/rig/tune` and `GET /api/rig` need an [`api`](#api) key; see [rig tuning windows](ports-and-endpoints.md#rig-tuning-windows).
 - The rigctld connection has no authentication, which is rigctld's own design. Keep it on loopback or a trusted network.
 
@@ -569,6 +571,37 @@ Read for an `iqcard:` device: IQ on a sound card's left (I) and right (Q) inputs
 - A capture overrun is marked in the audio as a gap of its own length, not spliced, and counted where the channel audio stream counts lost audio.
 - The card's mixer is not touched. Refused, exit 2: a `sampleRate` outside 8000 to 768000; a `centreFrequency` of 0 or less; an imbalance outside the limits above; `ssbLowHz` and `ssbHighHz` that do not rise from 0; a `gain` of 0 or less; any `ptt`.
 - The station receives only, as on `ubersdr:`. A card that will not open exits 1 and the service retries.
+
+## `rtltcp`
+
+```json
+{ "device": "rtltcp:pi.local", "rtltcp": { "sampleRate": 1024000, "gainDb": 29.7 } }
+```
+
+Read for an `rtltcp:` device. Ignored otherwise. The server sends raw IQ and this station demodulates it with its own filter, so the SSB and FM keys here are the station's filter, not something asked of the server. The demodulator follows the band plan's sideband: `usb`, `lsb`, or FM for `"sideband": "fm"`.
+
+| Key | Type | Default | What it is |
+|---|---|---|---|
+| `readOnly` | bool | `false` | A server that takes no orders, such as OpenWebRX's rtl_tcp-compatible port. Nothing is sent to it. |
+| `centreFrequency` | number | absent | With `readOnly`, the Hz the server's profile is centred on. Required with `readOnly`, refused without it. |
+| `sampleRate` | int | `1024000` | Samples a second. Controlled: the rate asked for, 225001 to 300000 or 900001 to 3200000. With `readOnly`: required, the rate the profile is pinned to. |
+| `gainDb` | number | absent: the tuner's own gain | Tuner gain to ask for, 0 to 60 dB; the tuner takes its nearest step. Controlled only. |
+| `ppm` | int | `0` | Frequency correction to ask for, parts per million. Controlled only. |
+| `rtlAgc` | bool | `false` | Turn on the RTL2832's own digital AGC. Controlled only. |
+| `noDataSeconds` | number | `5` | Seconds a connected server may send nothing before it is dropped and reconnected. |
+| `ssbLowHz` | number | `150` | Bottom of the station's SSB filter, Hz from the dial. |
+| `ssbHighHz` | number | `3450` | Top of that filter. |
+| `fmIfBandwidthHz` | number | `16000` | The station's FM IF bandwidth, Hz, whole width about the carrier. |
+| `fmDeviationHz` | number | `3000` | The FM deviation heard as full scale, Hz. |
+| `gain` | number | `1.0` | Linear gain on the demodulated audio. |
+
+- The receiver is tuned by the band plan: every modem needs an `rfFrequency`, or `dialFrequency` must be set (`the rtl_tcp receiver at X has to be told where to listen ...`).
+- Controlled, the dongle is tuned 25 kHz below the dial (an eighth of the rate, at most 25 kHz), so its DC spike stays out of the channel. The rate, centre, correction, gain and AGC are sent at every connect, because the server may have restarted with its own defaults.
+- With `readOnly`, the dial has to fall inside the profile's band with its filter, or start-up stops with exit 2 (`cannot serve a dial of ...`).
+- A server that drops or goes quiet for `noDataSeconds` is reconnected, and the time it was gone is marked in the audio as a gap. One unreachable for five minutes stops the process with exit 1, and the service retries.
+- With `readOnly`, a stream that stops arriving at `sampleRate` (measured against the clock over five-second windows) is taken as a profile switch: its samples are dropped until the rate is right again, and the journal says so. A switch to another band at the same rate cannot be told for certain; a sudden lasting change in the stream's level or shape is said in the journal as a warning, and nothing else is done.
+- Refused, exit 2: `readOnly` without `centreFrequency` or `sampleRate`; `gainDb`, `ppm` or `rtlAgc` with `readOnly`; `centreFrequency` without it; a controlled `sampleRate` no dongle runs at; `gainDb` outside 0 to 60; `ppm` beyond 1000 either way; a `noDataSeconds`, `gain`, `fmIfBandwidthHz` or `fmDeviationHz` of 0 or less; `ssbLowHz` and `ssbHighHz` that do not rise from 0; any `ptt`, `rig`, `alsa.mixer` or `identify`, each named under its own section.
+- The station receives only. A server that cannot be reached at start-up exits 1 and the service retries.
 
 ## `waterfall`
 
@@ -788,6 +821,7 @@ Per-device defaults, used for whichever key is absent:
 | `flex:` | 30 | 30 |
 | `ubersdr:` | 30 | 30 |
 | `openwebrx:` | 30 | 30 |
+| `rtltcp:` | 30 | 30 |
 | ALSA sound card, `pipe:` | 0 (off) | 30 |
 | `--wav-loop`, `flex:mock` | 0 (off) | 0 (off) |
 | an uplinked station on a monitor | 0 (off) | 30 |
