@@ -12,7 +12,7 @@ Every TCP listener pdn-soundmodem opens, what each one speaks, and what the jour
 | ARDOP command port | the ardopcf host interface | `8515` | `modems[].port` on an `ardop` entry, `ardop.port`, `--ardop` | CR-terminated ASCII |
 | ARDOP data port | the ardopcf data socket | command port + 1 | always the next port up | length-prefixed blocks |
 | Paging port | POCSAG pages in, pages heard out | `8106` | `paging.port`, `--paging PORT[:BAUD]` | one text line per command |
-| Page port | the station page, its WebSocket, the channel audio stream, survey captures, `/metrics`, `/api` | `8107` | `waterfall.port`, `--waterfall` | HTTP and WebSocket |
+| Page port | the station page, its WebSocket, the channel audio stream, the receive window, survey captures, `/metrics`, `/api` | `8107` | `waterfall.port`, `--waterfall` | HTTP and WebSocket |
 | Monitor site | the picker, one page per receiver, `/uplink` | none; must be stated | `waterfall.port` with a `monitor` section | HTTP and WebSocket |
 
 Every listener binds to the top-level `bind` (`--bind`), which is `127.0.0.1` by default. `"*"` or `"0.0.0.0"` binds every interface. A `bind` that is not an IP address stops the modem with exit 2. There is no per-listener bind; the `waterfall` section has no `bind` key.
@@ -198,6 +198,7 @@ The `waterfall` section (or `--waterfall PORT`) serves these routes on `waterfal
 | `/`, `/index.html` | the station page, with `Cache-Control: no-cache, must-revalidate` |
 | `/links` | the same page, opening on the links pane alone |
 | `/channel-audio` with a WebSocket upgrade | the local channel audio stream (see below); loopback only, no key |
+| `GET`/`POST /rig-window` | the receive window (see below); loopback only, no key |
 | any other path with a WebSocket upgrade | the live stream; the page itself opens `ws` |
 | `/survey/<file>` | one survey capture from `survey.path`, `audio/wav` or `application/json`; only with a `survey` section |
 | `/metrics`, `/metrics/frames` | see [Metrics](#metrics); only with a `metrics` section |
@@ -255,6 +256,28 @@ flex: widening the slice receive filter to 300-3200 Hz for the channel audio str
 flex: putting the slice receive filter back to 300-2700 Hz, no channel audio stream connection is asking for a band any more
 ```
 
+### The receive window
+
+`/rig-window` (issue #585, step 2 of the one-receiver plan, packet-net/pdn-mailcast#75) is a plain HTTP endpoint, not a WebSocket, for a program on the same machine to retune this station's rig and hold all transmitting for a while, then put everything back. It is built on the same tuning window and transmit hold as the keyed `POST /api/rig/tune` (see [rig tuning windows](#rig-tuning-windows)), generalised for any local program rather than the operator. Only with a [`rig`](config.md#rig) section; without one it 404s, the same answer `/api/rig` gives, and a Flex station (which is never given a `rig` section - `DaemonConfig.ValidateRig` refuses one on a `flex:` device) never has this to serve.
+
+No config and no key, restricted the same way as the channel audio stream above:
+
+- Refused unless the request's remote address is loopback (`127.0.0.1` or `::1`), whatever the station's own `bind` is.
+- Refused if the request carries an `Origin` header at all.
+- Refused if the request carries `X-Forwarded-For`, `Forwarded` or `X-Real-IP`, for the same reason as the stream: a reverse proxy on the same machine makes what it relays arrive from `127.0.0.1`. Do not point a proxy at `/rig-window`.
+
+A refused request gets a plain `403` with a one-line reason.
+
+| Endpoint | Method | Request | Response |
+|---|---|---|---|
+| `/rig-window` | `POST` | `{"dialHz": 7052000, "seconds": 60}`, optionally with `"widthHz"` (the band in Hz this caller needs to hear, 3000 by default, up to 20000) - at most 300 s at a time, renewable with another POST before it ends; `{"release": true}` to put the rig back now | 200 with the rig's state plus `"renewed"`, `"seconds"` and `"capped"` for a tune, or `"released"` for a release; 409 while the transmitter is keyed, while something else holds a window, or while a transmit lease is held; 400 for a missing or fractional `dialHz`, `seconds` of 0 or less, or `widthHz` outside 1 to 20000; 413 for a body over 4096 bytes |
+| `/rig-window` | `GET` | none | the rig's state: `{"connected", "dialHz", "mode", "passbandHz", "transmitHeld", "window": null or {"owner", "dialHz", "mode", "passbandHz", "expires"}, "problem"}` |
+| any other method | | | 405 with a one-line hint |
+
+There is nothing to tell two local callers apart, so they share the one window a station offers: the mode is never named by the caller, only the dial and the band it needs - this station asks for its own band plan's USB-family data mode (PKTUSB and the like) if it has one, else plain USB, the same choice the built-in mailcast receiver's retuner makes. A caller that goes quiet simply stops renewing, and the window runs out and puts the rig back on its own within 5 minutes - the same cap `/api/rig/tune` has, and the same restore-file guarantee across a crash (see [rig tuning windows](#rig-tuning-windows)).
+
+A window here is refused while a [transmit lease](#the-transmit-lease) is held, and a lease is refused while this window is open or still being opened, so a listener's receive window and a head end's broadcast can never both be granted.
+
 ### The API under /api
 
 An `api` section with a `key` installs the API on the page port. It needs a `waterfall` section and a `--config` file; without either the modem stops with exit 2. Without a key every `/api/` path is a 404, with two exceptions: `waterfall.enableAudioControls` true on a page that is not `public` serves `/api/mixer` with no key, and a [`mailcast`](config.md#mailcast) section serves the read-only `GET /api/mailcast` on a page that is not `public`.
@@ -309,6 +332,7 @@ A lease gives one sub-channel the radio's transmitter for a while, so a schedule
 - When the lease is released or runs out, the holder's modem sends its closing Morse ident first, if it has an `identify` and has transmitted since it last identified. If that modem's periodic ident is already queued, it is the closing ident; none is added. Until it has gone (or 60 s have passed), the lease is still held, `closing` reads true and nobody can take a lease, the holder included: a renewal then gets a 409 saying the lease is closing.
 - `"dropQueued": true` drops the holder's frames that have not keyed yet, for an aborted slot. Each is refused with the usual `DROPPED` line, so an ACKMODE host gets no ack for it, the same as any refused frame. A burst already on the air finishes. A release without it keeps the queue.
 - `"maxCarrierWaitSeconds"` bounds how long the holder's transmissions wait for a clear channel; after that they go anyway and the journal says so. Without it, carrier sense is as usual and a busy channel can hold the slot back indefinitely. A renewal that leaves it out keeps the value the lease already had.
+- A lease is refused while the [receive window](#the-receive-window) holds the rig, and the receive window is refused while a lease is held, so the two can never both be granted.
 
 The journal says when a lease starts, ends and runs out, and every five minutes while it is renewed:
 

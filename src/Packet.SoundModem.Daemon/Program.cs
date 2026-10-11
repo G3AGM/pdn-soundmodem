@@ -2441,6 +2441,18 @@ if (rigConfig is not null)
 
 await using var rigLifetime = rig;
 
+// The receive window (GET/POST /rig-window, issue #585): a program on the same machine retunes
+// this rig and holds all transmitting for a while, then gets it back. Keyless and loopback-only
+// like the channel audio stream, and independent of "api"."key" - a station with no "api"
+// section still offers this, the same as the stream offers no key either.
+if (rig is not null && waterfallServer is not null)
+{
+    waterfallServer.ReceiveWindowRig = rig;
+    Console.WriteLine(
+        $"rig: a receive window for another program on this machine, at {waterfallServer.Url}"
+        + "rig-window (loopback only, no key)");
+}
+
 // A station whose passband does not reach the mailcast signal: the rig goes to it around each slot.
 // Placement only chooses this with a "rig" section, so the rig is there.
 if (mailcast is not null && mailcastPlacement is { Retunes: true })

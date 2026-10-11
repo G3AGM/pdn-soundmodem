@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Packet.SoundModem.Channel;
+using Packet.SoundModem.Rig;
 
 namespace Packet.SoundModem.Daemon;
 
@@ -38,8 +39,13 @@ internal static class TxLeaseApi
     /// <param name="method">The HTTP method.</param>
     /// <param name="body">The request body, possibly empty.</param>
     /// <param name="cannot">Why this station cannot transmit at all, or null.</param>
+    /// <param name="rig">
+    /// The station's rig, or null without one. A lease is refused while a receive window
+    /// (issue #585) holds it, so a listener's receive window and a head end's broadcast lease
+    /// can never both be granted; see <see cref="Waterfall.WaterfallWebServer.ReceiveWindowOwner"/>.
+    /// </param>
     internal static (int Status, JsonObject Answer) Handle(
-        SoundModemChannel channel, string method, string body, string? cannot)
+        SoundModemChannel channel, string method, string body, string? cannot, RigControl? rig = null)
     {
         TransmitLease lease = channel.TransmitLease;
         if (method == "GET")
@@ -143,9 +149,23 @@ internal static class TxLeaseApi
 
         double max = TransmitLease.MaxDuration.TotalSeconds;
         bool capped = seconds > max;
-        TransmitLeaseGrant grant = lease.Take(
+        // A receive window (issue #585) and a transmit lease can never both be held: the window
+        // takes the station off the air for another program's purposes, and a lease granted
+        // underneath it would be a promise this station could not keep. The lease decides the two
+        // against each other, so neither can slip in while the other is deciding.
+        TransmitLeaseGrant? taken = lease.TakeUnlessWindow(
+            () => rig?.Snapshot().Window is { Owner: Waterfall.WaterfallWebServer.ReceiveWindowOwner },
             sub, TimeSpan.FromSeconds(Math.Min(seconds, max)),
             maxCarrierWait is double limit ? TimeSpan.FromSeconds(limit) : null);
+        if (taken is not TransmitLeaseGrant grant)
+        {
+            return (409, Conflict(channel,
+                rig?.Snapshot().Window is { Owner: Waterfall.WaterfallWebServer.ReceiveWindowOwner } open
+                    ? $"a receive window holds the rig on {open.Tuning} until {Utc(open.Expires)}, so "
+                      + "the transmit lease is refused until it ends"
+                    : "a receive window is being opened, so the transmit lease is refused until it ends"));
+        }
+
         if (!grant.Granted)
         {
             string why = !lease.IsClosing

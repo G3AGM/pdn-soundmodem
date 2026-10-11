@@ -257,6 +257,15 @@ public sealed class RigControl : IAsyncDisposable
     /// <summary>Whether the radio is keyed through rigctld.</summary>
     public bool KeysThroughRig => _options.KeysThroughRig;
 
+    /// <summary>
+    /// Where the band plan puts this station's own modems, or null for a station with no plan,
+    /// whose dial is the operator's and is never touched. A feature that wants "the rig's own
+    /// data mode, or USB" (the built-in mailcast receiver's retuner, and the receive window's
+    /// API) reads <see cref="RigTuning.Mode"/> here and asks <see cref="RigModes.SidebandOf"/>
+    /// whether it is a USB-family one.
+    /// </summary>
+    public RigTuning? Plan => _options.Plan;
+
     /// <summary>Whether rigctld is connected right now.</summary>
     public bool Connected => _connection is not null;
 

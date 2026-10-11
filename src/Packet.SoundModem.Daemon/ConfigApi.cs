@@ -175,7 +175,7 @@ internal sealed class ConfigApi
         }
 
         (int status, JsonObject answer) = TxLeaseApi.Handle(
-            _txLease, context.Request.HttpMethod, body, _txLeaseCannot);
+            _txLease, context.Request.HttpMethod, body, _txLeaseCannot, _rig);
         await RespondJsonAsync(context, status, answer.ToJsonString(Pretty)).ConfigureAwait(false);
     }
 

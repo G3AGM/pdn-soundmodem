@@ -774,4 +774,35 @@ public class TransmitLeaseTests
         channel.EnqueueTransmit(3, Frame(0x42)).IsFaulted.Should().BeTrue(
             "nor does anything it queues while its lease closes");
     }
+
+    [Fact]
+    public void A_Lease_Is_Refused_At_Once_While_A_Receive_Window_Is_Opening_And_Granted_After()
+    {
+        (SoundModemChannel channel, _) = Station();
+        TransmitLease lease = channel.TransmitLease;
+
+        lease.TryBeginOpeningWindow(out int? holder).Should().BeTrue();
+        holder.Should().BeNull();
+        lease.TakeUnlessWindow(() => false, 3, TimeSpan.FromSeconds(60)).Should().BeNull(
+            "the window is still talking to the rig, and a lease must not be granted underneath it");
+        lease.Holder.Should().BeNull();
+
+        lease.EndOpeningWindow();
+        lease.TakeUnlessWindow(() => true, 3, TimeSpan.FromSeconds(60)).Should().BeNull(
+            "once opened, the rig's own state says the window is there");
+        lease.TakeUnlessWindow(() => false, 3, TimeSpan.FromSeconds(60))!.Value.Granted.Should().BeTrue();
+    }
+
+    [Fact]
+    public void A_Receive_Window_Cannot_Begin_Opening_While_A_Lease_Is_Held()
+    {
+        (SoundModemChannel channel, _) = Station();
+        TransmitLease lease = channel.TransmitLease;
+        lease.Take(3, TimeSpan.FromSeconds(60)).Granted.Should().BeTrue();
+
+        lease.TryBeginOpeningWindow(out int? holder).Should().BeFalse();
+        holder.Should().Be(3);
+        lease.TakeUnlessWindow(() => false, 3, TimeSpan.FromSeconds(60))!.Value.Renewed.Should().BeTrue(
+            "a refused window leaves nothing behind to block the lease");
+    }
 }

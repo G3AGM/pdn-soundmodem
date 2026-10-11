@@ -9,6 +9,7 @@ using Packet.SoundModem.Channel;
 using Packet.SoundModem.Daemon;
 using Packet.SoundModem.Rig;
 using Packet.SoundModem.Modems;
+using Packet.SoundModem.Waterfall;
 
 namespace Packet.SoundModem.Tests.Rig;
 
@@ -600,6 +601,237 @@ public sealed class RigControlTests : IAsyncDisposable
         RigApi.Handle(rig, "/api/rig/tune", "POST", "not json").Status.Should().Be(400);
         RigApi.Handle(rig, "/api/rig", "POST", "").Status.Should().Be(405);
         _fake.Sets.Should().BeEmpty();
+    }
+
+    // ---------------------------------------------------------------- the receive window (issue #585)
+
+    private SoundModemChannel Channel(int seed) => new(12000, _time, randomSeed: seed);
+
+    [Fact]
+    public async Task The_Receive_Window_Tunes_Renews_And_Releases()
+    {
+        RigControl rig = await Started();
+        SoundModemChannel channel = Channel(21);
+
+        (int status, JsonObject answer) = ReceiveWindowApi.Handle(rig, channel.TransmitLease, "GET", "");
+        status.Should().Be(200);
+        answer["window"].Should().BeNull();
+
+        (status, answer) = ReceiveWindowApi.Handle(
+            rig, channel.TransmitLease, "POST", """{"dialHz": 7052000, "seconds": 90}""");
+        status.Should().Be(200);
+        answer["renewed"]!.GetValue<bool>().Should().BeFalse();
+        answer["transmitHeld"]!.GetValue<bool>().Should().BeTrue();
+        answer["window"]!["owner"]!.GetValue<string>().Should().Be(WaterfallWebServer.ReceiveWindowOwner);
+        answer["window"]!["dialHz"]!.GetValue<long>().Should().Be(7_052_000);
+        answer["window"]!["mode"]!.GetValue<string>().Should().Be("USB");
+        answer["window"]!["passbandHz"]!.GetValue<int>().Should().Be(ReceiveWindowApi.DefaultWidthHz);
+        _fake.DialHz.Should().Be(7_052_000);
+        _fake.PassbandHz.Should().Be(ReceiveWindowApi.DefaultWidthHz);
+
+        (status, answer) = ReceiveWindowApi.Handle(
+            rig, channel.TransmitLease, "POST",
+            """{"dialHz": 7052000, "seconds": 600, "widthHz": 2000}""");
+        status.Should().Be(200);
+        answer["renewed"]!.GetValue<bool>().Should().BeTrue();
+        answer["capped"]!.GetValue<bool>().Should().BeTrue();
+        answer["seconds"]!.GetValue<double>().Should().Be(RigControl.MaxWindow.TotalSeconds);
+        _fake.PassbandHz.Should().Be(2000, "a renewal that asks for a different width retunes to it");
+
+        (status, answer) = ReceiveWindowApi.Handle(rig, channel.TransmitLease, "POST", """{"release": true}""");
+        status.Should().Be(200);
+        answer["released"]!.GetValue<bool>().Should().BeTrue();
+        answer["window"].Should().BeNull();
+        _fake.DialHz.Should().Be(14_074_000);
+    }
+
+    [Theory]
+    [InlineData(null, "USB")]
+    [InlineData("USB", "USB")]
+    [InlineData("PKTUSB", "PKTUSB")]
+    [InlineData("LSB", "USB")]
+    [InlineData("FM", "USB")]
+    public async Task The_Receive_Window_Asks_For_The_Rigs_Own_Usb_Family_Mode_Or_Falls_Back_To_Usb(
+        string? planMode, string expectedMode)
+    {
+        RigTuning? plan = planMode is null ? null : new RigTuning(7_049_450, planMode, 2400);
+        RigControl rig = await Started(plan: plan);
+        SoundModemChannel channel = Channel(22);
+
+        (_, JsonObject answer) = (ReceiveWindowApi.Handle(
+            rig, channel.TransmitLease, "POST", """{"dialHz": 7052000}"""));
+
+        answer["window"]!["mode"]!.GetValue<string>().Should().Be(expectedMode);
+    }
+
+    [Fact]
+    public async Task The_Receive_Window_Is_Refused_While_Keyed()
+    {
+        RigControl rig = await Started();
+        IPttControl ptt = rig.Guard(new NullPtt());
+        ptt.Key();
+        SoundModemChannel channel = Channel(23);
+
+        (int status, JsonObject answer) = ReceiveWindowApi.Handle(
+            rig, channel.TransmitLease, "POST", """{"dialHz": 7052000}""");
+
+        status.Should().Be(409);
+        answer["refused"]!.GetValue<string>().Should().Contain("keyed");
+        ptt.Unkey();
+    }
+
+    [Fact]
+    public async Task The_Receive_Window_Answers_400_For_A_Bad_Request_And_405_For_Other_Methods()
+    {
+        RigControl rig = await Started();
+        SoundModemChannel channel = Channel(24);
+
+        ReceiveWindowApi.Handle(rig, channel.TransmitLease, "POST", "{}").Status.Should().Be(400);
+        ReceiveWindowApi.Handle(rig, channel.TransmitLease, "POST", """{"dialHz": 7052000.5}""")
+            .Status.Should().Be(400);
+        ReceiveWindowApi.Handle(rig, channel.TransmitLease, "POST", """{"dialHz": "7052000"}""")
+            .Status.Should().Be(400);
+        ReceiveWindowApi.Handle(rig, channel.TransmitLease, "POST", """{"dialHz": 7052000, "seconds": 0}""")
+            .Status.Should().Be(400);
+        ReceiveWindowApi.Handle(rig, channel.TransmitLease, "POST", """{"dialHz": 7052000, "widthHz": 0}""")
+            .Status.Should().Be(400);
+        ReceiveWindowApi.Handle(rig, channel.TransmitLease, "POST", """{"dialHz": 7052000, "widthHz": 999999}""")
+            .Status.Should().Be(400);
+        ReceiveWindowApi.Handle(rig, channel.TransmitLease, "POST", "not json").Status.Should().Be(400);
+        ReceiveWindowApi.Handle(rig, channel.TransmitLease, "DELETE", "").Status.Should().Be(405);
+        _fake.Sets.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task A_Receive_Window_And_A_Transmit_Lease_Refuse_Each_Other_But_A_Lease_Alone_Is_Granted()
+    {
+        RigControl rig = await Started();
+        SoundModemChannel channel = Channel(25);
+        channel.AddModem(3, sink => new Afsk1200Modem(12000, sink));
+
+        // A lease is still granted normally with no window open.
+        (int leaseStatus, JsonObject leaseAnswer) = TxLeaseApi.Handle(
+            channel, "POST", """{"subChannel": 3, "seconds": 60}""", null, rig);
+        leaseStatus.Should().Be(200);
+        leaseAnswer["held"]!.GetValue<bool>().Should().BeTrue();
+        channel.TransmitLease.Release(3);
+
+        // A receive window is refused while the lease is held.
+        TxLeaseApi.Handle(channel, "POST", """{"subChannel": 3, "seconds": 60}""", null, rig);
+        (int windowStatus, JsonObject windowAnswer) = ReceiveWindowApi.Handle(
+            rig, channel.TransmitLease, "POST", """{"dialHz": 7052000}""");
+        windowStatus.Should().Be(409);
+        windowAnswer["refused"]!.GetValue<string>().Should().Contain("holds the transmit lease");
+        channel.TransmitLease.Release(3);
+
+        // And a lease is refused while a receive window is open.
+        ReceiveWindowApi.Handle(rig, channel.TransmitLease, "POST", """{"dialHz": 7052000}""");
+        (int refusedLeaseStatus, JsonObject refusedLease) = TxLeaseApi.Handle(
+            channel, "POST", """{"subChannel": 3, "seconds": 60}""", null, rig);
+        refusedLeaseStatus.Should().Be(409);
+        refusedLease["refused"]!.GetValue<string>().Should().Contain("receive window");
+        channel.TransmitLease.Holder.Should().BeNull("the lease was refused, not granted");
+        ReceiveWindowApi.Handle(rig, channel.TransmitLease, "POST", """{"release": true}""");
+    }
+
+    [Fact]
+    public async Task A_Receive_Window_Is_Capped_At_Five_Minutes_And_Ends_On_Its_Own()
+    {
+        RigControl rig = await Started();
+        SoundModemChannel channel = Channel(26);
+
+        (_, JsonObject answer) = ReceiveWindowApi.Handle(
+            rig, channel.TransmitLease, "POST", """{"dialHz": 7052000, "seconds": 3600}""");
+        answer["capped"]!.GetValue<bool>().Should().BeTrue();
+        answer["seconds"]!.GetValue<double>().Should().Be(RigControl.MaxWindow.TotalSeconds);
+        rig.HoldsTransmitter.Should().BeTrue();
+
+        _time.Advance(RigControl.MaxWindow);
+
+        _fake.DialHz.Should().Be(14_074_000);
+        rig.HoldsTransmitter.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task A_Receive_Window_Writes_Its_Restore_Target_Down_For_Recovery_After_A_Crash()
+    {
+        RigControl rig = await Started(persist: true);
+        SoundModemChannel channel = Channel(27);
+
+        ReceiveWindowApi.Handle(rig, channel.TransmitLease, "POST", """{"dialHz": 7052000, "seconds": 60}""");
+
+        // What a SIGKILL during this window would leave for the next start-up to read back - the
+        // same file and format proven generically above (An_Open_Window_Writes_Its_Restore_Target...).
+        RigRestoreFile.Read(RestorePath, _fake.Endpoint, out _, out _)
+            .Should().Be(new RigTuning(14_074_000, "USB", 2400));
+
+        ReceiveWindowApi.Handle(rig, channel.TransmitLease, "POST", """{"release": true}""");
+        File.Exists(RestorePath).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task A_Station_Killed_During_A_Receive_Window_Puts_The_Rig_Back_At_Its_Next_Start()
+    {
+        RigControl first = await Started(persist: true);
+        SoundModemChannel channel = Channel(28);
+        ReceiveWindowApi.Handle(
+            first, channel.TransmitLease, "POST", """{"dialHz": 7052000, "seconds": 60}""").Status.Should().Be(200);
+        byte[] leftBehind = await File.ReadAllBytesAsync(RestorePath);
+
+        // A SIGKILL never gets to put the rig back: what it leaves is the rig where the window put
+        // it and the file the window wrote. Stopped cleanly here (which puts the rig back), then
+        // both set back to exactly that, so the next start-up is the only thing that can restore it.
+        await first.DisposeAsync();
+        _fake.DialHz = 7_052_000;
+        _fake.PassbandHz = ReceiveWindowApi.DefaultWidthHz;
+        await File.WriteAllBytesAsync(RestorePath, leftBehind);
+
+        RigControl next = Rig(persist: true);
+        await next.StartAsync(CancellationToken.None);
+
+        await Eventually(() => !next.HoldsTransmitter, "the restore is done on connecting", TimeSpan.FromSeconds(1));
+        _said.Should().Contain(s => s.Contains("stopped during a tuning window last time"));
+        _fake.DialHz.Should().Be(14_074_000);
+        _fake.PassbandHz.Should().Be(2400);
+        File.Exists(RestorePath).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task A_Receive_Window_Holds_Kiss_Frames_And_Refuses_The_Key_Until_It_Ends()
+    {
+        // The receive window is an ordinary rig window, so everything RigControl.HoldsTransmitter
+        // holds is held by it; MailcastRetuneTests.Every_Source_Of_Transmission_Is_Held_While_The_Rig_Is_On_The_Mailcast_Dial
+        // goes through every source (KISS, idents, paging, the transmitter test, ARDOP) for any
+        // window. This pins that a window opened here is one of them.
+        RigControl rig = await Started();
+        var channel = new SoundModemChannel(12000, randomSeed: 29);
+        channel.AddModem(0, sink => ModemCatalog.Create("afsk1200", 12000, sink));
+        channel.Csma.Persistence = 255;
+        var line = new CountingPtt();
+        var output = new Packet.SoundModem.Tests.Channel.FakeAudioOutput(12000);
+        using var stop = new CancellationTokenSource();
+        Task transmitter = channel.RunTransmitterAsync(output, rig.HoldTransmissions(channel, line), stop.Token);
+        ReceiveWindowApi.Handle(
+            rig, channel.TransmitLease, "POST", """{"dialHz": 7052000, "seconds": 60}""").Status.Should().Be(200);
+
+        Task kiss = channel.EnqueueTransmit(
+            0, Packet.SoundModem.Tests.Mailcast.MailcastSlotAudio.Ui("G8ABC", "GB7TST", "hello"u8));
+        await Task.Delay(TimeSpan.FromMilliseconds(300));
+
+        rig.HoldsTransmitter.Should().BeTrue("idents read this, and are not sent while it is true");
+        kiss.IsCompleted.Should().BeFalse("held, not sent and not dropped");
+        line.Keys.Should().Be(0);
+        Action key = rig.Guard(new CountingPtt()).Key;
+        key.Should().Throw<TransmitterHeldException>().WithMessage("*for a receive window*");
+
+        ReceiveWindowApi.Handle(rig, channel.TransmitLease, "POST", """{"release": true}""").Status.Should().Be(200);
+
+        await kiss.WaitAsync(TimeSpan.FromSeconds(30));
+        line.Keys.Should().Be(1);
+        _fake.DialHz.Should().Be(14_074_000);
+        await stop.CancelAsync();
+        Func<Task> ended = () => transmitter;
+        await ended.Should().ThrowAsync<OperationCanceledException>();
     }
 
     [Fact]

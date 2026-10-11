@@ -88,6 +88,12 @@ public sealed class TransmitLease
 
     private readonly TimeProvider _time;
     private readonly Lock _gate = new();
+
+    // A receive window (issue #585) and a lease can never both be granted. The two decisions are
+    // made under this lock, never across a rig's I/O: a window marks itself opening here, tunes
+    // with nothing held, then clears the mark, by which time the rig shows the window itself.
+    private readonly Lock _windowArbitration = new();
+    private bool _windowOpening;
     private readonly ConditionalWeakTable<object, StrongBox<int>> _attributed = [];
     private int? _holder;
 
@@ -139,6 +145,58 @@ public sealed class TransmitLease
     /// held. Null (the default) releases at once.
     /// </summary>
     public Func<int, Task?>? Closing { get; set; }
+
+    /// <summary>
+    /// Marks a receive window (issue #585) as being opened, unless a lease is held. Until
+    /// <see cref="EndOpeningWindow"/>, <see cref="TakeUnlessWindow"/> refuses every lease, so the
+    /// window can talk to the rig with nothing locked and no lease can be granted underneath it.
+    /// </summary>
+    /// <param name="holder">The sub-channel holding the lease, when refused.</param>
+    /// <returns>False, with <paramref name="holder"/> set, while a lease is held.</returns>
+    public bool TryBeginOpeningWindow(out int? holder)
+    {
+        lock (_windowArbitration)
+        {
+            holder = Holder;
+            if (holder is not null)
+            {
+                return false;
+            }
+
+            _windowOpening = true;
+            return true;
+        }
+    }
+
+    /// <summary>Ends what <see cref="TryBeginOpeningWindow"/> began, whether or not the window
+    /// was opened: from here an open window is seen through the rig's own state.</summary>
+    public void EndOpeningWindow()
+    {
+        lock (_windowArbitration)
+        {
+            _windowOpening = false;
+        }
+    }
+
+    /// <summary>
+    /// <see cref="Take"/>, unless a receive window is being opened or
+    /// <paramref name="windowOpen"/> says one is open, decided as one step against
+    /// <see cref="TryBeginOpeningWindow"/>.
+    /// </summary>
+    /// <param name="windowOpen">Whether a receive window is open now. Called under a lock, so
+    /// it must not block.</param>
+    /// <param name="subChannel">As for <see cref="Take"/>.</param>
+    /// <param name="duration">As for <see cref="Take"/>.</param>
+    /// <param name="maxCarrierWait">As for <see cref="Take"/>.</param>
+    /// <returns>The grant, or null when a receive window is open or being opened.</returns>
+    public TransmitLeaseGrant? TakeUnlessWindow(
+        Func<bool> windowOpen, int subChannel, TimeSpan duration, TimeSpan? maxCarrierWait = null)
+    {
+        lock (_windowArbitration)
+        {
+            return _windowOpening || windowOpen() ? null : Take(subChannel, duration, maxCarrierWait);
+        }
+    }
 
     /// <summary>The sub-channel holding the lease, or null when nobody does.</summary>
     public int? Holder

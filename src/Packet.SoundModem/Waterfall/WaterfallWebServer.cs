@@ -4,6 +4,7 @@ using System.Net;
 using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Threading.Channels;
 using M0LTE.Dsp;
 using Packet.Ax25;
@@ -11,6 +12,7 @@ using Packet.Ax25.Monitor;
 using Packet.SoundModem.Channel;
 using Packet.SoundModem.Dsp;
 using Packet.SoundModem.Modems;
+using Packet.SoundModem.Rig;
 
 namespace Packet.SoundModem.Waterfall;
 
@@ -915,6 +917,17 @@ public sealed class WaterfallWebServer : IAsyncDisposable
         get => _channelAudioStream.BandRequested;
         set => _channelAudioStream.BandRequested = value;
     }
+
+    /// <summary>
+    /// This station's rig, if a program on the same machine may borrow it for a while: installs
+    /// <c>/rig-window</c> (issue #585), keyless and loopback-only like <c>/channel-audio</c>,
+    /// generalising the tuning window the built-in mailcast receiver's own retuner already uses
+    /// so any local program can retune the rig and hold all transmitting, then get it back. Null
+    /// (the default) 404s the path - a station with no "rig" section offers no rig to borrow, the
+    /// same answer <c>/api/rig</c> and <c>/api/rig/tune</c> give, and a Flex station (which is
+    /// never given a <c>rig</c> section at all) never has one to set here.
+    /// </summary>
+    public RigControl? ReceiveWindowRig { get; set; }
 
     /// <summary>
     /// What this station has heard, served at <c>/metrics</c> (Prometheus text) and
@@ -2630,6 +2643,15 @@ public sealed class WaterfallWebServer : IAsyncDisposable
     public const string IdentTransmissionMode = "cw-ident";
 
     /// <summary>
+    /// Who a window opened over <c>/rig-window</c> (issue #585, <see cref="ReceiveWindowApi"/>)
+    /// is held by, in the rig's own journal lines and in <c>RigWindow.Owner</c>. Public so the
+    /// daemon's transmit-lease API can refuse a lease while one is open without this project
+    /// exposing <see cref="ReceiveWindowApi"/> itself, the same reasoning as
+    /// <see cref="TestTransmissionMode"/> and <see cref="IdentTransmissionMode"/> above.
+    /// </summary>
+    public const string ReceiveWindowOwner = ReceiveWindowApi.Owner;
+
+    /// <summary>
     /// Receive audio to whoever asked for it, as [0x02][s16 LE mono] at the channel rate.
     /// </summary>
     /// <remarks>
@@ -2871,6 +2893,50 @@ public sealed class WaterfallWebServer : IAsyncDisposable
                 return true;
             }
 
+            // The receive window (issue #585): a program on the same machine retunes this
+            // station's rig and holds all transmitting for a while, then gets it back. The same
+            // local-program rule as the channel audio stream above, and for the same reason: no
+            // key, so loopback, no Origin and no proxy is the whole of its authentication.
+            if (requestPath == ReceiveWindowApi.Path)
+            {
+                if (ReceiveWindowRig is not { } rig)
+                {
+                    await RespondPlainAsync(context, 404,
+                        "this station has no \"rig\" section, so it offers no receive window")
+                        .ConfigureAwait(false);
+                    return true;
+                }
+
+                if (await RefusedUnlessLocalProgramAsync(context, "rig-window", "the receive window")
+                        .ConfigureAwait(false))
+                {
+                    return true;
+                }
+
+                string windowBody = "";
+                if (context.Request.HttpMethod == "POST")
+                {
+                    // Keyless, so its body is capped: a real request is a few dozen bytes.
+                    char[] read = new char[4097];
+                    using var reader = new StreamReader(context.Request.InputStream, Encoding.UTF8);
+                    int got = await reader.ReadBlockAsync(read, 0, read.Length).ConfigureAwait(false);
+                    if (got == read.Length)
+                    {
+                        await RespondPlainAsync(context, 413, "a receive window request is at most 4096 bytes")
+                            .ConfigureAwait(false);
+                        return true;
+                    }
+
+                    windowBody = new string(read, 0, got);
+                }
+
+                (int windowStatus, JsonObject windowAnswer) = ReceiveWindowApi.Handle(
+                    rig, _channel.TransmitLease, context.Request.HttpMethod, windowBody);
+                await RespondJsonAsync(context, windowStatus, windowAnswer.ToJsonString())
+                    .ConfigureAwait(false);
+                return true;
+            }
+
             if (context.Request.IsWebSocketRequest)
             {
                 // Where this page says it came from, and where it reached us. Recorded now and
@@ -3055,6 +3121,25 @@ public sealed class WaterfallWebServer : IAsyncDisposable
             {
             }
         }
+    }
+
+    /// <summary>Writes a one-line plain-text answer, for the receive window's refusals.</summary>
+    private static Task RespondPlainAsync(HttpListenerContext context, int status, string text) =>
+        RespondAsync(context, status, "text/plain; charset=utf-8", text);
+
+    /// <summary>Writes a JSON answer, for the receive window.</summary>
+    private static Task RespondJsonAsync(HttpListenerContext context, int status, string json) =>
+        RespondAsync(context, status, "application/json; charset=utf-8", json);
+
+    private static async Task RespondAsync(
+        HttpListenerContext context, int status, string contentType, string body)
+    {
+        byte[] bytes = Encoding.UTF8.GetBytes(body);
+        context.Response.StatusCode = status;
+        context.Response.ContentType = contentType;
+        context.Response.ContentLength64 = bytes.Length;
+        await context.Response.OutputStream.WriteAsync(bytes).ConfigureAwait(false);
+        context.Response.Close();
     }
 
     /// <summary>
