@@ -33,6 +33,11 @@ public sealed class FlexArbitrationWiringTests
                 Arbitration = true,
                 TransmitFilterHighHz = 5350,
                 StationName = "pdn-soundmodem",
+                // The mock confirms every keyup, so the wait ends when its interlock status lands.
+                // The default 750 ms is a verdict on a real radio; with every thread-pool thread
+                // busy elsewhere in the suite the client reads that status later than that, the
+                // keyup is judged lost and Key throws (reproduced by starving the pool, #668).
+                ArbitrationTimings = new FlexPttArbitrationOptions { ConfirmTimeout = TimeSpan.FromSeconds(30) },
             },
             cancellation: CancellationToken.None);
 
@@ -53,5 +58,6 @@ public sealed class FlexArbitrationWiringTests
         slice.Should().BeGreaterThan(filter);
         xmit.Should().BeGreaterThan(slice);
         log.FindIndex(xmit + 1, c => c == "xmit 0").Should().BeGreaterThan(xmit, "the won keyup unkeys");
+        log.Count(c => c == "xmit 1").Should().Be(1, "nothing contends with the mock, so the first keyup wins");
     }
 }
