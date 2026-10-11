@@ -119,6 +119,15 @@ public sealed record FlexTuning
     public bool Arbitration { get; init; }
 
     /// <summary>
+    /// The timings <see cref="Arbitration"/> keys with, in place of M0LTE.Flex's defaults. Its
+    /// transmit filter is ignored: the keyup always re-asserts <see cref="TransmitFilterHighHz"/>.
+    /// Not configurable, and internal on purpose: the tests set a confirm window that a starved
+    /// thread pool cannot outlast, because against <c>flex:mock</c> the radio's confirmation
+    /// always comes and only its arrival time varies (#668).
+    /// </summary>
+    internal FlexPttArbitrationOptions? ArbitrationTimings { get; init; }
+
+    /// <summary>
     /// Bring the station up for receive only: never write the radio's global transmit state
     /// (transmit audio source, transmit filter, RF power), and never contend for a slice.
     /// </summary>
@@ -293,7 +302,7 @@ public static class FlexDevice
         // re-asserts it while the radio is quiet - the global, persistent filter is the
         // setting two stations otherwise overwrite under each other.
         IPttControl ptt = tuning.Arbitration
-            ? station.CreateArbitratedPtt(new FlexPttArbitrationOptions
+            ? station.CreateArbitratedPtt((tuning.ArbitrationTimings ?? new FlexPttArbitrationOptions()) with
             {
                 TransmitFilterHighHz = tuning.TransmitFilterHighHz,
             })
