@@ -55,6 +55,15 @@
   #about a { color: var(--amber); text-decoration: none; }
   #about a:hover { text-decoration: underline; }
   #about a.back { white-space: nowrap; }
+  /* Issue #583: a newer pdn-soundmodem is in the apt repository. Operator page only - never
+     shown on a public one, which is somebody else's receiver and not this operator's software
+     to upgrade. */
+  #updateNotice { padding: 7px 14px; background: rgba(245,168,60,.09);
+                  border-bottom: 1px solid var(--edge); font-size: 13px; line-height: 1.45; }
+  #updateNotice a { color: var(--amber); text-decoration: none; }
+  #updateNotice a:hover { text-decoration: underline; }
+  #updateNotice code { font-family: var(--mono); background: rgba(255,255,255,.08);
+                        padding: 1px 5px; border-radius: 4px; }
   .seg-btn { font: inherit; color: var(--fg); background: #1a1d22; border: 1px solid #2b3038;
              border-radius: 6px; padding: 3px 10px; cursor: pointer; }
   .seg-btn.on { background: var(--amber); color: #12141a; border-color: var(--amber); }
@@ -643,6 +652,7 @@
 </header>
 
 <div id="about" hidden></div>
+<div id="updateNotice" hidden></div>
 <div id="chips"></div>
 
 <main>
@@ -1162,6 +1172,24 @@ function applyDaemonVersion() {
   const span = wm.querySelector("span");
   span.textContent = cfg.publicMonitor ? `pdn-soundmodem ${short}` : `${short} · ${commit}`;
   span.title = full;
+}
+
+// A newer pdn-soundmodem in the apt repository (issue #583). One plain notice, the same wording
+// for every release - never a flag for one that matters more than another, by Tom's decision on
+// the issue. Never on a public page (applyPublicFlavour already hides #updateNotice there along
+// with everything else a visitor cannot act on), and the server never sends one to a public page
+// in the first place.
+function applyUpdate(view) {
+  const el = document.getElementById("updateNotice");
+  if (!el) return;
+  if (!view || detached) { el.hidden = true; el.innerHTML = ""; return; }
+  const notes = `<a href="${esc(view.release)}" target="_blank" rel="noopener">What's new</a>`;
+  const how = view.command
+    ? `Upgrade: <code>${esc(view.command)}</code>`
+    : `See <a href="${esc(view.setupDocs)}" target="_blank" rel="noopener">the apt repository setup</a>, `
+      + `so the next upgrade is one command.`;
+  el.innerHTML = `Version ${esc(view.available)} is available (you have ${esc(view.installed)}). ${notes}. ${how}`;
+  el.hidden = false;
 }
 
 // ---------------------------------------------------------------- receive audio (opt-in)
@@ -2683,12 +2711,15 @@ function connect() {
         checkPageVersion(msg.page);
         applyPublicFlavour();
         applyDaemonVersion();
+        applyUpdate(cfg.update);
         setRadioStatus(cfg.radioStatus);
         setListeners(cfg.listeners);
         syncTxTestRunning();
         renderChips(); resizeAll(); drawRuler(); drawOverlay();
       } else if (msg.type === "radio") {
         setRadioStatus(msg.status);
+      } else if (msg.type === "update") {
+        applyUpdate(msg.update);
       } else if (msg.type === "listeners") {
         setListeners(msg.listeners);
       } else if (msg.type === "tx") {

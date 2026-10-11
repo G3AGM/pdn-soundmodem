@@ -13,6 +13,7 @@ using Packet.SoundModem.Channel;
 using Packet.SoundModem.Dsp;
 using Packet.SoundModem.Modems;
 using Packet.SoundModem.Rig;
+using Packet.SoundModem.Updates;
 
 namespace Packet.SoundModem.Waterfall;
 
@@ -180,6 +181,14 @@ public sealed class WaterfallOptions
     /// so a set <see cref="VersionLabel"/> is shown alone, as a release, with no commit.
     /// </remarks>
     public string? VersionLabel { get; set; }
+
+    /// <summary>
+    /// The daemon's own check for a newer pdn-soundmodem in the apt repository (issue #583), or
+    /// null (the default) for a page that says nothing about it. Set by the daemon, which owns
+    /// the check's lifetime; never shown on a <see cref="Public"/> page, which fronts somebody
+    /// else's receiver and is not where that operator would read it.
+    /// </summary>
+    public UpdateCheck? Updates { get; set; }
 }
 
 /// <summary>
@@ -528,6 +537,7 @@ public sealed class WaterfallWebServer : IAsyncDisposable
     private WaterfallSource? _source;
     private byte[]? _surveyMessage;
     private byte[]? _hostPortsMessage;
+    private byte[]? _updateMessage;
     private string _surveyDirectory = "";
     private volatile bool _keyed;
     private byte[] _configMessage = [];
@@ -1060,6 +1070,33 @@ public sealed class WaterfallWebServer : IAsyncDisposable
         Broadcast(WebSocketMessageType.Text, message);
     }
 
+    /// <summary>
+    /// Pushes what <see cref="WaterfallOptions.Updates"/> last found (issue #583) to every
+    /// connected browser and into the config message any later one is handed. Called once from
+    /// <see cref="Start"/>, as the check's own <c>Checked</c> event; never on a
+    /// <see cref="WaterfallOptions.Public"/> page, which this is never wired to in the first
+    /// place.
+    /// </summary>
+    private void SetUpdateAvailable()
+    {
+        UpdateView? view = _options.Updates!.View();
+        byte[] message = JsonSerializer.SerializeToUtf8Bytes(new { type = "update", update = view }, Json);
+        lock (_stateLock)
+        {
+            if (_source is not null)
+            {
+                _configMessage = BuildConfigMessage(); // before Start, Start's own build picks it up
+            }
+
+            if (_updateMessage is { } previous && previous.AsSpan().SequenceEqual(message))
+            {
+                return;
+            }
+
+            _updateMessage = message;
+            Broadcast(WebSocketMessageType.Text, message);
+        }
+    }
 
     /// <summary>
     /// Measures every modem's band, hooks the channel (receive tap + frame events) and
@@ -1177,6 +1214,17 @@ public sealed class WaterfallWebServer : IAsyncDisposable
         _pingedAt = _options.TimeProvider.GetTimestamp();
         _keepAlive = _options.TimeProvider.CreateTimer(
             _ => SweepKeepAlive(), null, KeepAlivePeriod, KeepAlivePeriod);
+
+        // Issue #583: never on a public page, which fronts somebody else's receiver and is not
+        // where that operator would read it. The daemon owns the check's own lifetime (its
+        // journal line keeps going whether or not a waterfall page exists at all); this only
+        // reaches the page for what it has already found, including anything it found before
+        // this page existed.
+        if (!_options.Public && _options.Updates is { } updates)
+        {
+            updates.Checked += SetUpdateAvailable;
+        }
+
         if (_listener is { } listener)
         {
             listener.Start();
@@ -1276,6 +1324,10 @@ public sealed class WaterfallWebServer : IAsyncDisposable
             // public page, which is never told about them in the first place.
             listeners = _options.Public ? null : ListenersForPage(),
             pickerUrl = _options.PickerUrl,
+            // A newer pdn-soundmodem in the apt repository (issue #583). Never on a public page,
+            // for the same reason the mixer and the TX test never are: it is the operator's own
+            // software to upgrade, not a visitor's.
+            update = _options.Public ? null : _options.Updates?.View(),
             // TX test: null on every page that is not the operator's own, so the control is
             // absent rather than hidden - a public page is never sent the shape of it.
             txTest = _txTest is not { } test ? null : new
@@ -3750,6 +3802,11 @@ public sealed class WaterfallWebServer : IAsyncDisposable
         _channel.KeyedReceiveBlock -= _channelAudioStream.OnKeyedBlock;
         _channel.ReceiveAudioLost -= _channelAudioStream.OnInputLost;
         _channelAudioStream.Shutdown();
+        if (_options.Updates is { } updates)
+        {
+            updates.Checked -= SetUpdateAvailable;
+        }
+
         _linkExpiry?.Dispose();
         _linkExpiry = null;
         _keepAlive?.Dispose();
