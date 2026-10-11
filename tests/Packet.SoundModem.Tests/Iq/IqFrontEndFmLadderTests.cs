@@ -66,8 +66,10 @@ public sealed class IqFrontEndFmLadderTests(ITestOutputHelper output)
             }
 
             output.WriteLine($"| {cnr:+0;-0} | {floats}/{bursts} | {string.Join(" | ", heard.Select(h => $"{h}/{bursts}"))} |");
+            // Paired arms (the same bursts and noise, deterministic in the seed), so the spread is
+            // quantisation alone: 3 of 50 at most when measured (2026-10-11), and 6 is twice that.
             heard.Should().OnlyContain(
-                h => h >= floats - 14,
+                h => h >= floats - 6,
                 "carrying {0} through a pipe format must cost no sensitivity at {1} dB CNR", mode, cnr);
         }
     }

@@ -300,6 +300,30 @@ public sealed class IqPipeTests : IDisposable
     }
 
     [Fact]
+    public void Clock_Drift_Over_A_Long_Run_Is_Not_Charged_To_A_Later_Stall()
+    {
+        var clock = new FakeTimeProvider();
+        var feed = new ScriptedFeed(clock);
+        // Ten minutes of a feed whose clock runs 0.5 % slow against this machine's: 3 s behind by
+        // the end, which no stall explains. Then a 1.1 s pause that brings the 1.1 s it owes.
+        for (int k = 0; k < 6000; k++)
+        {
+            feed.Chunks.Enqueue((new byte[2 * 1000], TimeSpan.FromSeconds(0.1005)));
+        }
+
+        feed.Chunks.Enqueue((new byte[2 * 11_000], TimeSpan.FromSeconds(1.1)));
+        using var source = Source(new ScriptedLauncher(feed), IqSampleFormat.Cu8, rate: 10_000, maxYoungRuns: 1, clock: clock);
+
+        var buffer = new float[1 << 16];
+        while (source.Read(buffer) > 0)
+        {
+        }
+
+        source.SamplesLost.Should().Be(0, "the drift is re-anchored each rate window, so the pause alone is judged");
+        Errors().Should().NotContain(line => line.Contains("configured"), "0.5 % is inside the rate watch's tolerance");
+    }
+
+    [Fact]
     public void A_Writer_That_Sends_In_Bursts_On_Time_Has_No_Gaps()
     {
         var clock = new FakeTimeProvider();
@@ -430,6 +454,7 @@ public sealed class IqPipeTests : IDisposable
                 DspRate = 12_000,
                 Journal = journal,
                 DeviceKind = DeadFeedDevice.Alsa,
+                StarvationMessage = seconds => IqPipeStationDevice.StarvationWords(seconds, true, false, "head -c 48000 /dev/zero"),
                 TimeProvider = clock,
             },
             stopping.Token);
@@ -441,7 +466,9 @@ public sealed class IqPipeTests : IDisposable
         clock.Advance(TimeSpan.FromSeconds(30));
 
         await UntilAsync(() => faults.Count > 0, "the starvation watch fires");
-        faults[0].Reason.Should().Contain("receive feed starved");
+        faults[0].Reason.Should().Be(
+            "receive feed starved: the SDR program (head) has delivered no IQ for 30 s - restarting the station to start afresh",
+            "the device names what starved, not a sound card");
         await running.WaitAsync(TimeSpan.FromSeconds(10));
         counting.Dispose();
     }
@@ -491,6 +518,15 @@ public sealed class IqPipeTests : IDisposable
         spec.FmIfBandwidthHz.Should().Be(20_000);
         spec.FmDeviationHz.Should().Be(3000, "the largest deviation any mode on it is sent with");
         IqPipeStationDevice.ChannelFor("LSB", -5_000, [], 1f).Demodulation.Should().Be(IqDemodulation.Lsb);
+    }
+
+    [Theory]
+    [InlineData(true, false, "rx_sdr -F CF32 -", "receive feed starved: the SDR program (rx_sdr) has delivered no IQ for 30 s - restarting the station to start afresh")]
+    [InlineData(false, false, "/run/iq", "receive feed starved: no program is writing IQ into /run/iq for 30 s - restarting the station to start afresh")]
+    [InlineData(false, true, "standard input", "receive feed starved: nothing has been written to standard input for 30 s - restarting the station to start afresh")]
+    public void A_Starved_Feed_Is_Named_For_What_It_Is(bool command, bool stdin, string description, string said)
+    {
+        IqPipeStationDevice.StarvationWords(30, command, stdin, description).Should().Be(said);
     }
 
     [Fact]

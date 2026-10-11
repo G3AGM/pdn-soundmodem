@@ -112,7 +112,8 @@ internal sealed class IqPipeSource : IIqSource, IDisposable
     private int _carry;
 
     // The run being read: when it started, what it has delivered, and whether it has delivered.
-    private long _runStart;
+    private long _runStart; // the stall rule's baseline, moved each rate window
+    private long _runBegan; // when the run first delivered
     private long _runPairs;
     private bool _runFresh;
     private long _lastData;
@@ -342,6 +343,7 @@ internal sealed class IqPipeSource : IIqSource, IDisposable
             // a retune. Both land on this block, which is the first after them.
             _runFresh = false;
             _runStart = now;
+            _runBegan = now;
             _windowStart = now;
             _windowPairs = 0;
             if (_lastData != 0)
@@ -384,6 +386,20 @@ internal sealed class IqPipeSource : IIqSource, IDisposable
         WatchRate(now, pairs);
     }
 
+    /// <summary>
+    /// Moves the stall rule's baseline to now, once a rate window. Without it the difference
+    /// between the SDR's clock and this machine's would pile up over a long run (100 ppm is a
+    /// third of a second an hour), and a later stall would be charged that as well as itself.
+    /// A feed that is ahead (a writer that buffers) keeps its lead; a shortfall that no stall
+    /// explained is dropped, as the rate watch is what reports a feed that is slow.
+    /// </summary>
+    private void ReanchorStallClock(long now)
+    {
+        double expected = _time.GetElapsedTime(_runStart, now).TotalSeconds * _options.Rate;
+        _runPairs = Math.Max(0, (long)Math.Round(_runPairs - expected));
+        _runStart = now;
+    }
+
     private void WatchRate(long now, int pairs)
     {
         _windowPairs += pairs;
@@ -397,6 +413,7 @@ internal sealed class IqPipeSource : IIqSource, IDisposable
         Volatile.Write(ref _measuredRate, measured);
         _windowStart = now;
         _windowPairs = 0;
+        ReanchorStallClock(now);
         double ratio = measured / _options.Rate;
         if (Math.Abs(ratio - 1) <= _options.RateTolerance)
         {
@@ -442,7 +459,7 @@ internal sealed class IqPipeSource : IIqSource, IDisposable
         string reason = feed.EndReason;
         feed.Dispose();
         bool delivered = !_runFresh;
-        bool healthy = delivered && _time.GetElapsedTime(_runStart) >= _options.HealthyRun;
+        bool healthy = delivered && _time.GetElapsedTime(_runBegan) >= _options.HealthyRun;
         if (healthy)
         {
             _youngRuns = 0;

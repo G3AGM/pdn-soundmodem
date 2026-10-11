@@ -123,7 +123,8 @@ internal sealed class Station : IDisposable
         _deadFeedWatch = silenceSeconds > 0 ? new DeadFeedWatch(_inputRate, silenceSeconds) : null;
         _inputLossSeen = options.InputLossCount?.Invoke() ?? 0;
         _silenceMessage = SilenceMessage(options.DeviceKind, silenceSeconds);
-        _starvationMessage = StarvationMessage(options.DeviceKind, starvationSeconds);
+        _starvationMessage = options.StarvationMessage?.Invoke(starvationSeconds)
+            ?? StarvationMessage(options.DeviceKind, starvationSeconds);
 
         _keyedHandler = keyed =>
         {
@@ -578,6 +579,13 @@ internal sealed record StationOptions
     /// treated the same way without it.
     /// </summary>
     public Func<long>? InputLossCount { get; init; }
+
+    /// <summary>
+    /// The device's own words for a starved feed, given the threshold in seconds, or null for the
+    /// device family's. For a device whose family wording would name the wrong thing: an SDR
+    /// program or a FIFO behind <c>iqpipe:</c> is not a stalled sound card. ASCII.
+    /// </summary>
+    public Func<double, string>? StarvationMessage { get; init; }
 
     /// <summary>
     /// Polled every ten seconds from the receive loop, in order, after the xrun counters; each

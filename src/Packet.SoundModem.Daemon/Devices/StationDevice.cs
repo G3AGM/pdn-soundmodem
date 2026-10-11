@@ -244,6 +244,10 @@ internal sealed class DeviceOpening
     /// </summary>
     public Func<long>? InputLossCount { get; init; }
 
+    /// <summary>The device's own words for a starved feed, given the threshold in seconds, or
+    /// null for its dead-feed family's (<see cref="StationOptions.StarvationMessage"/>).</summary>
+    public Func<double, string>? StarvationMessage { get; init; }
+
     /// <summary>The sound card's playback stream, on ALSA.</summary>
     public AlsaAudioOutput? AlsaOut { get; init; }
 

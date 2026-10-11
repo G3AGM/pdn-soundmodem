@@ -288,8 +288,20 @@ internal sealed class IqPipeStationDevice : StationDevice
             Playback = new NullAudioOutput(context.DspRate),
             Input = new IqPipeAudioInput(channel, receiver, source),
             InputLossCount = () => channel.Discontinuities,
+            StarvationMessage = seconds => StarvationWords(seconds, RunsCommand, ReadsStandardInput, launcher.Description),
             Tuner = new IqPipeTuner(channel, source, dcClear),
         });
+    }
+
+    /// <summary>What a starved <c>iqpipe:</c> feed is, in the operator's words.</summary>
+    internal static string StarvationWords(double seconds, bool runsCommand, bool standardInput, string description)
+    {
+        string what = runsCommand
+            ? $"the SDR program ({ChildProcessIqFeedLauncher.ProgramName(description)}) has delivered no IQ"
+            : standardInput
+                ? "nothing has been written to standard input"
+                : $"no program is writing IQ into {description}";
+        return $"receive feed starved: {what} for {seconds:F0} s - restarting the station to start afresh";
     }
 
     private static IEnumerable<string> ModesOf(DeviceOpenContext context)
