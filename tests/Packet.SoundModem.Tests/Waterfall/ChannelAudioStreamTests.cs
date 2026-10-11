@@ -160,9 +160,18 @@ public class ChannelAudioStreamTests : IAsyncLifetime
             () =>
             {
                 float[] block = new float[240];
+                // Paced at the rate real audio would arrive (240 samples at SampleRate Hz), not
+                // flat out. #667: an unpaced loop here was fast enough to peg a whole CPU core,
+                // and under a fully loaded machine that starved the listener's own thread during
+                // a connection's WebSocket upgrade, closing it before the handshake finished. The
+                // test still proves the same thing - a hello arrives before any audio on a
+                // connection opened while audio keeps flowing - just at a pace that leaves the
+                // rest of the process room to run.
+                var pace = TimeSpan.FromSeconds((double)block.Length / SampleRate);
                 while (!feeding.IsCancellationRequested)
                 {
                     _channel.ProcessReceive(block);
+                    Thread.Sleep(pace);
                 }
             },
             CancellationToken.None);
