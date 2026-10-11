@@ -199,7 +199,7 @@ Without `rfFrequency` the dial is left where you put it.
 - If rigctld is not running, the journal warns and the station carries on without it, trying again in the background. `"required": true` makes the station wait for it instead.
 - Start rigctld without `--vfo`; the modem does not speak that form.
 
-`POST /api/rig/tune` retunes the rig for a while and always puts it back, for listening to something outside your passband. While it is retuned the station does not transmit. See [rig tuning windows](reference/ports-and-endpoints.md#rig-tuning-windows). The built-in pdn-mailcast receiver uses the same windows to hear GB7RDG's bulletins around each slot: [14-mailcast.md](14-mailcast.md).
+`POST /api/rig/tune` retunes the rig for a while and always puts it back, for listening to something outside your passband. While it is retuned the station does not transmit. See [rig tuning windows](reference/ports-and-endpoints.md#rig-tuning-windows). pdn-mailcast-receiver, with `"retune": true`, asks for one through the [receive window](reference/ports-and-endpoints.md#the-receive-window) to hear GB7RDG's bulletins around each slot: [14-mailcast.md](14-mailcast.md).
 
 Every key is in [`rig`](reference/config.md#rig).
 

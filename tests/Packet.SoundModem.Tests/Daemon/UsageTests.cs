@@ -85,9 +85,10 @@ public class UsageTests
 
     /// <summary>
     /// Runs the daemon built beside these tests (the project reference copies pdn-soundmodem.dll
-    /// and its runtimeconfig into the test output) and waits for it to finish.
+    /// and its runtimeconfig into the test output) and waits for it to finish. Shared with the
+    /// mailcast deprecation tests, whose config stops the daemon before it opens anything.
     /// </summary>
-    private static (int ExitCode, string Stdout, string Stderr) RunDaemon(params string[] args)
+    internal static (int ExitCode, string Stdout, string Stderr) RunDaemon(params string[] args)
     {
         string dll = Path.Combine(AppContext.BaseDirectory, "pdn-soundmodem.dll");
         File.Exists(dll).Should().BeTrue(

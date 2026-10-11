@@ -46,7 +46,7 @@ Last TX shows the forward power in watts and the SWR your radio reported. It goe
 
 TX test keys the radio and sends a test burst through the normal transmit path. Pick two tones for an SSB linearity check, one free tone, or one of the FM deviation presets, set the seconds, and press Send. It is never on a public page, and a station with no transmitter shows the control disabled with the reason the journal gave at start-up, such as `tx test: unavailable - no "ptt" is configured, so this daemon does not key the radio`. The settings live in [`txTest`](reference/config.md#txtest) and the procedure is in [04-levels.md](04-levels.md).
 
-Mailcast appears on a station with a [`mailcast`](reference/config.md#mailcast) section: the next of GB7RDG's slots, the last slot's tone offset and SNR, the frames heard, bulletins complete, partial and delivered, the BBS's state and, on a retuned rig, where the rig is. Hover it for the detail. It is never on a public page. [14-mailcast.md](14-mailcast.md) has the rest.
+Mailcast appears on a station with a [`mailcast`](reference/config.md#mailcast) section: the next of GB7RDG's slots, the last slot's tone offset and SNR, the frames heard, bulletins complete, partial and delivered, the BBS's state and, on a retuned rig, where the rig is. Hover it for the detail. It is never on a public page. The built-in receiver is deprecated, and the panel says so under its readings, with a link to the receiver guide; [14-mailcast.md](14-mailcast.md) says how to move across.
 
 Level sets the two dBFS ends of the waterfall's colour scale, floor and top. Auto sets both from what is on screen now. These are per browser and are remembered.
 

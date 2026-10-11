@@ -149,6 +149,11 @@
     border: 1px solid var(--edge); border-radius: 3px; padding: 2px 8px 3px; background: #0c1016;
   }
   #mailcastCtl .txfig.bad b { color: #ffb3a3; }
+  /* The built-in receiver is going (#587): said on the panel as well as in the journal, with the
+     guide one click away. On a line of its own under the readings; amber, like the page's links. */
+  #mcDeprecated { display: block; font-size: 11px; color: var(--amber); }
+  #mcDeprecated[hidden] { display: none; }
+  #mcDeprecated a { color: inherit; }
   /* The one reading here an operator has to stop and act on, in either state - and while keyed
      the whole readout is already red, so the alarm needs a box of its own to be seen at all. */
   .txfig.alarm { background: #7a1f14; border-radius: 3px; padding: 0 5px; }
@@ -618,6 +623,7 @@
       <button class="btn" id="mcMeasureGo" title="Average about 10 s of this station's own quiet receive audio and work out the best dial from its passband edges">Measure my filter</button>
     </div>
     <span id="mcMeasureResult"></span>
+    <span id="mcDeprecated" hidden></span>
   </div>
 
   <!-- Last on purpose: the header wraps on a narrow window, and this is the control that
@@ -818,6 +824,15 @@ function setMailcast(m) {
     $("mcRig").textContent = rig.listening ? "on mailcast" : "waiting";
     $("mcRigFig").title = rig.state || "";
   }
+  // The status carries the notice on every station that runs the built-in receiver (#587); a
+  // status without one shows none.
+  const dep = m.deprecated;
+  const notice = $("mcDeprecated");
+  notice.hidden = !dep;
+  notice.innerHTML = dep
+    ? `${esc(dep.text)} <a href="${esc(dep.guide)}" target="_blank" rel="noopener">How to move across</a>`
+    : "";
+  notice.title = dep ? dep.copy : "";
   box.title = `pdn-mailcast on ${m.centreMhz} MHz (USB dial ${m.dialMhz} MHz), ${m.placement === "retune" ? "the rig retuned around each slot" : "on this station's own passband"}.`
     + `\nFrom: ${(m.sources || []).join(", ")}.`
     + `\nSlots: ${m.timetable}${m.timetableFromDirectory ? " (from the broadcast's directory)" : ""}.`

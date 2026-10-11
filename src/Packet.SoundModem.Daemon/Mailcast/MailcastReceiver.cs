@@ -287,6 +287,7 @@ internal sealed class MailcastReceiver : IAsyncDisposable
                 ["state"] = Retuner.State,
             },
             ["locksReleased"] = LocksReleased,
+            ["deprecated"] = MailcastDeprecation.Panel(_config),
         };
     }
 

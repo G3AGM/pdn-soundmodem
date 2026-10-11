@@ -753,6 +753,19 @@ const listenersDriven = listenersChip();
 run(`ws.onmessage({ data: JSON.stringify({ type: "listeners", listeners: [] }) })`);
 const listenersCleared = listenersChip();
 
+// The built-in mailcast receiver's notice that it is going (issue #587), driven through the page's
+// own setMailcast: first with a status carrying it, as every built-in receiver's does, then with
+// one that does not, which must hide it again. Text from outside is escaped like anything else.
+const mailcastNotice = () => ({
+  hidden: sandbox.document.getElementById("mcDeprecated").hidden === true,
+  html: sandbox.document.getElementById("mcDeprecated").innerHTML ?? "",
+  title: sandbox.document.getElementById("mcDeprecated").title ?? "",
+});
+run(`setMailcast({ deprecated: { text: "Going <soon>.", copy: "Copy bbs.", guide: "https://example.org/guide#here" } })`);
+const mailcastNoticeShown = mailcastNotice();
+run(`setMailcast({})`);
+const mailcastNoticeCleared = mailcastNotice();
+
 // Tearing the links pane off into a window of its own, last, because it closes the pane behind it
 // and everything above wanted the pane as it was.
 sandbox.document.getElementById("linksDetach").click();
@@ -968,6 +981,8 @@ process.stdout.write(JSON.stringify({
   listenersOnArrival,
   listenersDriven,
   listenersCleared,
+  mailcastNoticeShown,
+  mailcastNoticeCleared,
   connected,
   txTestOffered,
   txTestOptions,

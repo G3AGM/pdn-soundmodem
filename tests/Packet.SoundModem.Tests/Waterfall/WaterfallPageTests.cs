@@ -252,6 +252,34 @@ public class WaterfallPageTests
     }
 
     /// <summary>
+    /// The mailcast panel says the built-in receiver is going when its status carries the notice,
+    /// which every built-in receiver's does, with the guide as a link and what to copy on hover,
+    /// and says nothing when it does not (issue #587).
+    /// </summary>
+    [Fact]
+    public async Task The_Mailcast_Panel_Shows_The_Deprecation_Notice_Only_When_The_Status_Carries_It()
+    {
+        string node = ResolveNode();
+        Assert.SkipWhen(node.Length == 0, "node is not installed; the page cannot be executed");
+
+        var channel = new SoundModemChannel(SampleRate, randomSeed: 7);
+        channel.AddModem(0, sink => new Afsk1200Modem(SampleRate, sink));
+        int port = FreePorts.Next();
+        await using var server = new WaterfallWebServer(channel, port);
+        server.Start();
+
+        Probe probe = await RunProbeAsync(node, port);
+
+        probe.Thrown.Should().BeEmpty();
+        probe.MailcastNoticeShown.Hidden.Should().BeFalse();
+        probe.MailcastNoticeShown.Html.Should().Be(
+            "Going &lt;soon&gt;. <a href=\"https://example.org/guide#here\" target=\"_blank\" rel=\"noopener\">How to move across</a>");
+        probe.MailcastNoticeShown.Title.Should().Be("Copy bbs.");
+        probe.MailcastNoticeCleared.Hidden.Should().BeTrue("a status without the notice shows none");
+        probe.MailcastNoticeCleared.Html.Should().BeEmpty();
+    }
+
+    /// <summary>
     /// A station identification is tagged onto its burst and listed in the panel, and both say it
     /// is an ident rather than ordinary traffic on the same slot.
     /// </summary>
@@ -2388,6 +2416,8 @@ public class WaterfallPageTests
 
     private sealed record ListenersChip(bool Hidden, string Html);
 
+    private sealed record MailcastNotice(bool Hidden, string Html, string Title);
+
     private sealed record Probe(
         string? SocketUrl,
         string? LinksWindowUrl,
@@ -2463,6 +2493,8 @@ public class WaterfallPageTests
         ListenersChip ListenersOnArrival,
         ListenersChip ListenersDriven,
         ListenersChip ListenersCleared,
+        MailcastNotice MailcastNoticeShown,
+        MailcastNotice MailcastNoticeCleared,
         MixerPanel? MixerOnArrival,
         MixerPanel? MixerAfterGain,
         MixerPanel? MixerAfterPlay,

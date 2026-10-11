@@ -17,7 +17,7 @@ pdn-soundmodem is a software TNC for Linux. It turns a sound card, a FlexRadio o
 11. [11-logging-and-metrics.md](11-logging-and-metrics.md): the frame log, survey captures, raw capture, Prometheus and Grafana.
 12. [12-troubleshooting.md](12-troubleshooting.md): read the journal, the start-up refusals, and what to do when nothing decodes.
 13. [13-decode-a-recording.md](13-decode-a-recording.md): get the frames out of a WAV file with the source-tree tools.
-14. [14-mailcast.md](14-mailcast.md): receive GB7RDG's 40 m bulletins into your own LinBPQ or FBB, on a pdn-soundmodem station with an HF rig; nothing is transmitted.
+14. [14-mailcast.md](14-mailcast.md): receive GB7RDG's 40 m bulletins into your own LinBPQ or FBB with pdn-mailcast-receiver, and move across from the deprecated built-in receiver.
 15. [15-sdr-through-a-pipe.md](15-sdr-through-a-pipe.md): receive through your own RTL-SDR, SDRplay, Airspy or HackRF, with `rtl_sdr` or `rx_sdr` writing IQ into the modem.
 
 The two hardware pages are what to build to wire a CM108 interface to a radio: [hardware/tait-tm8100-cm108.md](hardware/tait-tm8100-cm108.md) for a Tait TM8100 on FM, and [hardware/yaesu-ft450d-cm108.md](hardware/yaesu-ft450d-cm108.md) for a Yaesu FT-450D's DATA jack on HF.
@@ -49,7 +49,7 @@ The two hardware pages are what to build to wire a CM108 interface to a radio: [
 - Fix a service that will not start: [12-troubleshooting.md](12-troubleshooting.md#the-service-will-not-start).
 - Decode a recording: [13-decode-a-recording.md](13-decode-a-recording.md).
 - Receive GB7RDG's 40 m bulletins into my own BBS: [14-mailcast.md](14-mailcast.md).
-- Hear GB7RDG's bulletins on a 40 m packet station by retuning the rig: [14-mailcast.md](14-mailcast.md#add-the-receiver).
+- Move from the built-in mailcast receiver to pdn-mailcast-receiver: [14-mailcast.md](14-mailcast.md#moving-across).
 - Wire a Tait TM8100: [hardware/tait-tm8100-cm108.md](hardware/tait-tm8100-cm108.md).
 - Wire a Yaesu FT-450D: [hardware/yaesu-ft450d-cm108.md](hardware/yaesu-ft450d-cm108.md).
 - Receive a Xiegu G90's or a SoftRock's IQ through a sound card: [hardware/iq-sound-card.md](hardware/iq-sound-card.md).
