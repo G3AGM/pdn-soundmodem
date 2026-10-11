@@ -159,6 +159,27 @@ public sealed class WaterfallOptions
     /// See <see cref="Audio.InputLevelMeter"/> for the numbers and where they come from.</para>
     /// </remarks>
     public bool InputLevelMeter { get; set; }
+
+    /// <summary>
+    /// Overrides what the page's <c>daemonVersion</c> line says, for a program that embeds this
+    /// library whose own version is not this library's (see
+    /// <see cref="Waterfall.DaemonVersion"/>). Null (the default) uses this library's own
+    /// <see cref="Waterfall.DaemonVersion"/>, exactly as before this option existed. A caller that
+    /// wants nothing shown can set an empty string.
+    /// </summary>
+    /// <remarks>
+    /// pdn-mailcast's receiver embeds <see cref="WaterfallWebServer"/> to show its own live
+    /// spectrogram, and ships a <c>Packet.SoundModem</c> NuGet package pinned in its
+    /// <c>Directory.Packages.props</c> - a version that drifts behind the real
+    /// <c>pdn-soundmodem</c> daemon it may be listening alongside, since both get released on
+    /// their own schedules. Without this, the page's version line always read as this library's
+    /// build, which looked like a mismatch or a stale install to anyone comparing the two, when it
+    /// was neither - it was just the library (packet-net/pdn-soundmodem#677,
+    /// packet-net/pdn-mailcast#100). The commit and release-ness that normally ride beside the
+    /// version number are this library's own and have nothing to say about an embedder's build,
+    /// so a set <see cref="VersionLabel"/> is shown alone, as a release, with no commit.
+    /// </remarks>
+    public string? VersionLabel { get; set; }
 }
 
 /// <summary>
@@ -1190,6 +1211,41 @@ public sealed class WaterfallWebServer : IAsyncDisposable
             source.BinWidthHz, source.LinesPerSecond, source.LineLength, band.LowHz, band.HighHz);
     }
 
+    /// <summary>
+    /// The config message's <c>daemonVersion</c> field: this library's own
+    /// <see cref="DaemonVersion"/> unless <see cref="WaterfallOptions.VersionLabel"/> overrides
+    /// it (see there for why an embedder would). Null (hiding the line entirely) only for an
+    /// empty <see cref="WaterfallOptions.VersionLabel"/>, which is how a caller asks for nothing
+    /// shown.
+    /// </summary>
+    private object? BuildDaemonVersionField()
+    {
+        if (_options.VersionLabel is not { } label)
+        {
+            return new
+            {
+                version = DaemonVersion.Version,
+                commit = DaemonVersion.Commit,
+                release = DaemonVersion.IsRelease,
+            };
+        }
+
+        if (label.Length == 0)
+        {
+            return null;
+        }
+
+        // The commit and release-ness that normally ride beside the version number are this
+        // library's own build metadata and say nothing about an embedder's build, so a set label
+        // stands alone, shown as a release with no commit.
+        return new
+        {
+            version = label,
+            commit = (string?)null,
+            release = true,
+        };
+    }
+
     private byte[] BuildConfigMessage()
     {
         WaterfallSource source = _source!;
@@ -1209,12 +1265,7 @@ public sealed class WaterfallWebServer : IAsyncDisposable
             // that document governs the station-to-monitor protocol only, and says outright that
             // this one, the browser protocol, "may change whenever the page does, because the
             // page and the server ship in the same binary" - so nothing there needed touching.
-            daemonVersion = new
-            {
-                version = DaemonVersion.Version,
-                commit = DaemonVersion.Commit,
-                release = DaemonVersion.IsRelease,
-            },
+            daemonVersion = BuildDaemonVersionField(),
             publicMonitor = _options.Public,
             title = _options.Title,
             about = _options.About,

@@ -133,6 +133,56 @@ public class WaterfallWebServerTests : IAsyncLifetime
         }
     }
 
+    /// <summary>
+    /// A program that embeds <see cref="WaterfallWebServer"/> and ships its own version can say
+    /// so (#677): the config's <c>daemonVersion</c> then reports that version, standing alone,
+    /// rather than this library's own build - which is what the embedder is pinning as a
+    /// package, not what it is running.
+    /// </summary>
+    [Fact]
+    public async Task A_Version_Label_Replaces_The_Librarys_Own_Daemon_Version()
+    {
+        int port = FreePorts.Next();
+        await using var server = new WaterfallWebServer(_channel, port, new WaterfallOptions
+        {
+            VersionLabel = "0.8.6",
+        });
+        server.Start();
+
+        using var socket = new ClientWebSocket();
+        await socket.ConnectAsync(new Uri($"ws://127.0.0.1:{port}/ws"), _cancellation.Token);
+        using JsonDocument config = await NextTextAsync(socket);
+
+        JsonElement daemonVersion = config.RootElement.GetProperty("daemonVersion");
+        daemonVersion.GetProperty("version").GetString().Should().Be("0.8.6");
+        daemonVersion.GetProperty("release").GetBoolean().Should().BeTrue(
+            "an embedder's own version is not this library's dev/release distinction to make");
+        daemonVersion.GetProperty("commit").ValueKind.Should().Be(JsonValueKind.Null,
+            "this library's build commit says nothing about the embedder's build");
+    }
+
+    /// <summary>
+    /// An empty label is how a caller asks for nothing shown at all, rather than falling back to
+    /// this library's own version - the page already treats a null <c>daemonVersion</c> as
+    /// "nothing to show" (<c>if (!v) return;</c> in <c>waterfall.html</c>).
+    /// </summary>
+    [Fact]
+    public async Task An_Empty_Version_Label_Hides_The_Daemon_Version_Entirely()
+    {
+        int port = FreePorts.Next();
+        await using var server = new WaterfallWebServer(_channel, port, new WaterfallOptions
+        {
+            VersionLabel = "",
+        });
+        server.Start();
+
+        using var socket = new ClientWebSocket();
+        await socket.ConnectAsync(new Uri($"ws://127.0.0.1:{port}/ws"), _cancellation.Token);
+        using JsonDocument config = await NextTextAsync(socket);
+
+        config.RootElement.GetProperty("daemonVersion").ValueKind.Should().Be(JsonValueKind.Null);
+    }
+
     [Fact]
     public async Task A_Captures_Audio_Can_Be_Fetched_And_Nothing_Else_Can()
     {
