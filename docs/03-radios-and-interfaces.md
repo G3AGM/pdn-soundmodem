@@ -18,6 +18,7 @@ By the end of this page you will know which `device` string and which `ptt` bloc
 | A FlexRadio on the LAN | `flex:10.45.0.76` |
 | A public UberSDR web receiver | `ubersdr:m9psy-1.instance.ubersdr.org` |
 | A public OpenWebRX or OpenWebRX+ receiver | `openwebrx:http://sdr.example.org:8073/` |
+| A radio's IQ output into a stereo sound card (Xiegu G90, SoftRock), receive only | `iqcard:plughw:CARD=Device,DEV=0`; see [hardware/iq-sound-card.md](hardware/iq-sound-card.md) |
 | Two FIFOs standing in for a card | `pipe:/tmp/in,/tmp/out` |
 | Nothing at all | `null` |
 
