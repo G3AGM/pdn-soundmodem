@@ -73,9 +73,15 @@ internal static class PcmTransfer
     /// <param name="pcm">The stream.</param>
     /// <param name="frameCount">Frames wanted.</param>
     /// <param name="failure">0, or the negative errno the stream gave up with.</param>
+    /// <param name="stopAtXrun">Return what was transferred before an xrun rather than recovering
+    /// and carrying on, so the frames returned never span the hole. The stream is left in its
+    /// xrun state, so the next call meets the same error at once, counts it and recovers, and the
+    /// frames that call returns are the first after the hole. For an IQ capture
+    /// (<see cref="Packet.SoundModem.Iq.SoundCardIqSource"/>), whose consumer has to be told
+    /// where a gap lies; an audio stream does not care and leaves this off.</param>
     /// <returns>Frames transferred, which is <paramref name="frameCount"/> unless
-    /// <paramref name="failure"/> is set.</returns>
-    internal static int Run(IPcmTransfer pcm, int frameCount, out int failure)
+    /// <paramref name="failure"/> is set or <paramref name="stopAtXrun"/> stopped it short.</returns>
+    internal static int Run(IPcmTransfer pcm, int frameCount, out int failure, bool stopAtXrun = false)
     {
         failure = 0;
         int done = 0;
@@ -96,6 +102,12 @@ internal static class PcmTransfer
             }
 
             int error = (int)moved;
+            if (stopAtXrun && done > 0 && error is -Epipe or -Estrpipe)
+            {
+                // Not counted and not recovered here: the next call meets it first thing.
+                return done;
+            }
+
             if (error is -Epipe or -Estrpipe)
             {
                 // The xrun proper: audio was lost here. EIO and EBADFD are the recovery itself

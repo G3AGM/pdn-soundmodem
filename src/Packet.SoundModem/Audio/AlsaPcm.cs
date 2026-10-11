@@ -206,6 +206,17 @@ public sealed class AlsaPcm : IDisposable, IPcmTransfer
         return Transfer(interleaved, "snd_pcm_readi");
     }
 
+    /// <summary>Reads interleaved frames (capture PCM), as <see cref="Read"/> does, except that an
+    /// overrun ends the read: the frames returned never span one. The overrun is counted in
+    /// <see cref="Xruns"/>, and recovered, by the call that returns the first frames after it, so
+    /// an increase seen after a call means the hole lies immediately before what it returned.</summary>
+    /// <returns>Frames read: the full span, or fewer when an overrun stopped it.</returns>
+    public int ReadUntilOverrun(Span<short> interleaved)
+    {
+        ObjectDisposedException.ThrowIf(_pcm == IntPtr.Zero, this);
+        return Transfer(interleaved, "snd_pcm_readi", stopAtXrun: true);
+    }
+
     /// <summary>Writes interleaved frames (playback PCM). Blocks until consumed -
     /// device-paced, which is exactly what sample-accurate PTT timing needs.
     /// Recovers from underruns transparently.</summary>
@@ -439,7 +450,7 @@ public sealed class AlsaPcm : IDisposable, IPcmTransfer
         SampleRate > 0 && frames > 0 ? (int)Math.Round(frames * 1000.0 / SampleRate) : 0;
 
     /// <summary>Pins the caller's span and turns the shared transfer loop over it.</summary>
-    private int Transfer(ReadOnlySpan<short> interleaved, string operation)
+    private int Transfer(ReadOnlySpan<short> interleaved, string operation, bool stopAtXrun = false)
     {
         int frameCount = interleaved.Length / Channels;
         int moved;
@@ -449,7 +460,7 @@ public sealed class AlsaPcm : IDisposable, IPcmTransfer
             fixed (short* p = interleaved)
             {
                 _transferBuffer = (IntPtr)p;
-                moved = PcmTransfer.Run(this, frameCount, out failure);
+                moved = PcmTransfer.Run(this, frameCount, out failure, stopAtXrun);
                 _transferBuffer = IntPtr.Zero;
             }
         }
