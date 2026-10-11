@@ -1,6 +1,7 @@
 using System.Net.Sockets;
 using System.Net.WebSockets;
 using System.Net;
+using System.Reflection;
 using System.Text;
 using System.Text.Json;
 using AwesomeAssertions;
@@ -181,6 +182,90 @@ public class WaterfallWebServerTests : IAsyncLifetime
         using JsonDocument config = await NextTextAsync(socket);
 
         config.RootElement.GetProperty("daemonVersion").ValueKind.Should().Be(JsonValueKind.Null);
+    }
+
+    /// <summary>
+    /// The default, with <see cref="WaterfallOptions.ChannelAudio"/> left unset: every existing
+    /// station keeps serving <c>/channel-audio</c> exactly as it did before the option existed
+    /// (issue #683).
+    /// </summary>
+    [Fact]
+    public async Task Channel_Audio_Is_Served_By_Default()
+    {
+        using var socket = new ClientWebSocket();
+        await socket.ConnectAsync(new Uri($"ws://127.0.0.1:{_port}{ChannelAudioStream.Path}"), _cancellation.Token);
+
+        (WebSocketMessageType kind, byte[] payload) = await Receive(socket);
+        kind.Should().Be(WebSocketMessageType.Text);
+        using JsonDocument hello = JsonDocument.Parse(payload);
+        hello.RootElement.GetProperty("type").GetString().Should().Be("hello");
+    }
+
+    /// <summary>
+    /// An embedder whose own page sits on a port reachable from the same machine
+    /// (pdn-mailcast's receiver, packet-net/pdn-soundmodem#683) sets
+    /// <see cref="WaterfallOptions.ChannelAudio"/> false, and <c>/channel-audio</c> 404s the
+    /// same way <c>/rig-window</c> does for a station with no rig - before any WebSocket
+    /// upgrade is attempted, so a plain GET sees a plain 404 rather than an upgrade refusal.
+    /// </summary>
+    [Fact]
+    public async Task Channel_Audio_Off_404s_The_Path()
+    {
+        int port = FreePorts.Next();
+        await using var server = new WaterfallWebServer(_channel, port, new WaterfallOptions
+        {
+            ChannelAudio = false,
+        });
+        server.Start();
+
+        using var http = new HttpClient();
+        HttpResponseMessage answer = await http.GetAsync(
+            $"http://127.0.0.1:{port}{ChannelAudioStream.Path}", _cancellation.Token);
+
+        answer.StatusCode.Should().Be(HttpStatusCode.NotFound);
+        (await answer.Content.ReadAsStringAsync(_cancellation.Token))
+            .Should().Contain("does not serve its own channel audio");
+
+        using var socket = new ClientWebSocket();
+        Func<Task> connect = () => socket.ConnectAsync(
+            new Uri($"ws://127.0.0.1:{port}{ChannelAudioStream.Path}"), _cancellation.Token);
+        await connect.Should().ThrowAsync<WebSocketException>(
+            "the path 404s unconditionally, so the upgrade itself is refused the same as any other 404");
+    }
+
+    /// <summary>
+    /// <see cref="WaterfallOptions.ChannelAudio"/> false skips the channel's receive tap and
+    /// <see cref="SoundModemChannel.KeyedReceiveBlock"/> wiring entirely (issue #683), rather
+    /// than merely refusing what connects to it: an embedder that wants no part of the stream
+    /// costs the channel nothing for it.
+    /// </summary>
+    [Fact]
+    public async Task Channel_Audio_Off_Wires_No_Tap_Or_Keyed_Block_Callback()
+    {
+        var channel = new SoundModemChannel(SampleRate, randomSeed: 53);
+        channel.AddModem(0, sink => new Afsk1200Modem(SampleRate, sink));
+        int port = FreePorts.Next();
+        await using var server = new WaterfallWebServer(channel, port, new WaterfallOptions
+        {
+            ChannelAudio = false,
+        });
+        server.Start();
+
+        var taps = (System.Collections.IEnumerable)typeof(SoundModemChannel)
+            .GetField("_receiveTaps", BindingFlags.NonPublic | BindingFlags.Instance)!
+            .GetValue(channel)!;
+        foreach (object? tap in taps)
+        {
+            ((Delegate)tap!).Target.Should().NotBeOfType<ChannelAudioStream>(
+                "ChannelAudio = false must skip the receive tap entirely, not merely refuse its reader");
+        }
+
+        var keyedBlock = (Delegate?)typeof(SoundModemChannel)
+            .GetField("KeyedReceiveBlock", BindingFlags.NonPublic | BindingFlags.Instance)!
+            .GetValue(channel);
+        (keyedBlock?.GetInvocationList() ?? []).Should().NotContain(
+            d => d.Target is ChannelAudioStream,
+            "ChannelAudio = false must skip the KeyedReceiveBlock wiring too");
     }
 
     [Fact]

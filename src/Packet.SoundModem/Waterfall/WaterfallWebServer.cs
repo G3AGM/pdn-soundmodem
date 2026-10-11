@@ -162,6 +162,20 @@ public sealed class WaterfallOptions
     public bool InputLevelMeter { get; set; }
 
     /// <summary>
+    /// Whether this station serves <c>/channel-audio</c> (issue #584) at all. True (the
+    /// default) keeps every existing station exactly as it was before this option existed. An
+    /// embedder whose own page sits on a port reachable from the same machine sets this false -
+    /// a <c>pdn-soundmodem</c> audio source pointed at that page would otherwise read the
+    /// embedder's own audio back from it, which is surprising rather than useful there. False
+    /// makes the path 404 the same way <see cref="WaterfallWebServer.ReceiveWindowRig"/> left
+    /// null already does to <c>/rig-window</c>, and - unlike a 404 that still has somewhere to
+    /// answer from - skips the channel's tap and
+    /// <see cref="SoundModemChannel.KeyedReceiveBlock"/> wiring entirely, so an embedder that
+    /// wants no part of the stream costs the channel nothing for it (issue #683).
+    /// </summary>
+    public bool ChannelAudio { get; set; } = true;
+
+    /// <summary>
     /// Overrides what the page's <c>daemonVersion</c> line says, for a program that embeds this
     /// library whose own version is not this library's (see
     /// <see cref="Waterfall.DaemonVersion"/>). Null (the default) uses this library's own
@@ -1151,15 +1165,20 @@ public sealed class WaterfallWebServer : IAsyncDisposable
 
         _configMessage = BuildConfigMessage();
 
-        // The local channel audio stream (issue #584): always registered, costing a no-op
-        // length check on the receive thread when nobody has connected to it, so existing
-        // stations see no change at all unless a program asks. Fed both halves of the channel's
-        // receive audio: the taps everyone else gets, and the blocks skipped for a keyup, which
-        // this stream alone turns into explicitly-marked silence rather than simply losing them;
-        // and told when the input lost audio, so its readers can be told too.
-        _channel.AddReceiveTap(_channelAudioStream.OnReceive);
-        _channel.KeyedReceiveBlock += _channelAudioStream.OnKeyedBlock;
-        _channel.ReceiveAudioLost += _channelAudioStream.OnInputLost;
+        // The local channel audio stream (issue #584): registered whenever
+        // WaterfallOptions.ChannelAudio leaves it on (the default), costing a no-op length check
+        // on the receive thread when nobody has connected to it, so existing stations see no
+        // change at all unless a program asks. Fed both halves of the channel's receive audio:
+        // the taps everyone else gets, and the blocks skipped for a keyup, which this stream
+        // alone turns into explicitly-marked silence rather than simply losing them; and told
+        // when the input lost audio, so its readers can be told too. An embedder that turned it
+        // off (issue #683) gets none of this wiring - not even the no-op cost.
+        if (_options.ChannelAudio)
+        {
+            _channel.AddReceiveTap(_channelAudioStream.OnReceive);
+            _channel.KeyedReceiveBlock += _channelAudioStream.OnKeyedBlock;
+            _channel.ReceiveAudioLost += _channelAudioStream.OnInputLost;
+        }
 
         _channel.AddReceiveTap(samples =>
         {
@@ -3009,22 +3028,36 @@ public sealed class WaterfallWebServer : IAsyncDisposable
             // page's own WebSocket below, which otherwise upgrades anything: this one is for a
             // program on the same machine, never a browser, so it is refused rather than served
             // the moment the local-program check fails. No key: loopback, no Origin and no proxy
-            // in between is the whole of its authentication.
-            if (requestPath == ChannelAudioStream.Path && context.Request.IsWebSocketRequest)
+            // in between is the whole of its authentication. An embedder that set
+            // WaterfallOptions.ChannelAudio false (issue #683) never reaches any of that: the
+            // path 404s unconditionally, the same answer a station with the stream on gives a
+            // request it does not recognise.
+            if (requestPath == ChannelAudioStream.Path)
             {
-                if (await RefusedUnlessLocalProgramAsync(context, "channel-audio", "the channel audio stream")
-                        .ConfigureAwait(false))
+                if (!_options.ChannelAudio)
                 {
+                    await RespondPlainAsync(context, 404,
+                        "this station does not serve its own channel audio")
+                        .ConfigureAwait(false);
                     return true;
                 }
 
-                string remoteDescription = context.Request.RemoteEndPoint?.ToString() ?? "a client";
-                HttpListenerWebSocketContext streamUpgrade =
-                    await context.AcceptWebSocketAsync(null).ConfigureAwait(false);
-                await _channelAudioStream.ServeAsync(
-                        streamUpgrade.WebSocket, remoteDescription, _options.DialFrequencyHz, _stopping.Token)
-                    .ConfigureAwait(false);
-                return true;
+                if (context.Request.IsWebSocketRequest)
+                {
+                    if (await RefusedUnlessLocalProgramAsync(context, "channel-audio", "the channel audio stream")
+                            .ConfigureAwait(false))
+                    {
+                        return true;
+                    }
+
+                    string remoteDescription = context.Request.RemoteEndPoint?.ToString() ?? "a client";
+                    HttpListenerWebSocketContext streamUpgrade =
+                        await context.AcceptWebSocketAsync(null).ConfigureAwait(false);
+                    await _channelAudioStream.ServeAsync(
+                            streamUpgrade.WebSocket, remoteDescription, _options.DialFrequencyHz, _stopping.Token)
+                        .ConfigureAwait(false);
+                    return true;
+                }
             }
 
             // The receive window (issue #585): a program on the same machine retunes this
@@ -3799,8 +3832,12 @@ public sealed class WaterfallWebServer : IAsyncDisposable
         _channel.FrameTransmittedWithReport -= OnFrameTransmitted;
         _channel.TransmittedAudio -= OnTransmittedAudio;
         _channel.TransmittingChanged -= OnTransmittingChanged;
-        _channel.KeyedReceiveBlock -= _channelAudioStream.OnKeyedBlock;
-        _channel.ReceiveAudioLost -= _channelAudioStream.OnInputLost;
+        if (_options.ChannelAudio)
+        {
+            _channel.KeyedReceiveBlock -= _channelAudioStream.OnKeyedBlock;
+            _channel.ReceiveAudioLost -= _channelAudioStream.OnInputLost;
+        }
+
         _channelAudioStream.Shutdown();
         if (_options.Updates is { } updates)
         {
