@@ -1,7 +1,6 @@
 using M0LTE.Dsp;
-using Packet.SoundModem.Iq;
 
-namespace Packet.SoundModem.UberSdr;
+namespace Packet.SoundModem.Iq;
 
 /// <summary>Knobs for <see cref="IqToFmAudioConverter"/>.</summary>
 public sealed class IqToFmAudioOptions
@@ -15,7 +14,7 @@ public sealed class IqToFmAudioOptions
     /// <summary>Frequency, within the IQ baseband, of the FM carrier (the dial). Set this to
     /// (transmit dial − RX tune frequency) so the carrier sits at 0 Hz before discrimination; a
     /// residual offset appears as a DC term on the recovered audio (and as
-    /// <see cref="Packet.SoundModem.Ota.FmDeviation.MeanHz"/> if measured), which most modems'
+    /// the FM deviation meter's mean if measured), which most modems'
     /// AC-coupling tolerates but which the on-air dial-correction nulls anyway.</summary>
     public double DialHz { get; init; }
 
@@ -49,7 +48,7 @@ public sealed class IqToFmAudioOptions
 /// <summary>
 /// Turns a captured IQ stream (complex baseband centred near the FM carrier) into the real audio a
 /// mode's demodulator consumes, by <b>instantaneous-frequency (phase-derivative) discrimination</b>
-/// - the FM counterpart of <see cref="SsbDemodulator"/>, and the receive half of the FM OTA
+/// - the FM counterpart of <see cref="M0LTE.Dsp.SsbDemodulator"/>, and the receive half of the FM OTA
 /// chain. The FM-native modes (afsk1200, fsk9600, c4fsk, qpsk3600 audio-over-FM) reach the air as
 /// frequency modulation, so the harness FM-demodulates the RSP1's IQ here and feeds the result to
 /// the mode's own demodulator exactly as the SSB path feeds it single-sideband audio.
@@ -58,16 +57,21 @@ public sealed class IqToFmAudioOptions
 /// → discriminate <c>arg(z[n]·conj(z[n-1]))·fs/2π</c> to instantaneous frequency → anti-alias
 /// low-pass and decimate to the output rate.</para>
 ///
-/// <para><b>This shares no filter kernel with the transmit-side <see cref="Packet.SoundModem.Ota.FmModulator"/>,
+/// <para><b>This shares no filter kernel with the transmit-side <c>FmModulator</c> (sm-ota),
 /// deliberately</b>, the same discipline the SSB pair keeps: the discriminator is the analytic
 /// inverse of the phase integrator, so the round trip recovers the modulating audio, but the tests
 /// check the deviation the modulator produced against an independent excursion measurement and the
 /// recovered audio against a decode, not merely against each other.</para>
+///
+/// <para>This is the whole-capture form, for a recording in hand; it allocates per call. A live
+/// stream goes through <see cref="StreamingFmDiscriminator"/> inside <see cref="IqReceiver"/>,
+/// which forms the same estimate block by block.</para>
 /// </summary>
 public sealed class IqToFmAudioConverter
 {
     private readonly IqToFmAudioOptions _opt;
 
+    /// <summary>Creates the converter; null takes every default.</summary>
     public IqToFmAudioConverter(IqToFmAudioOptions? options = null)
     {
         _opt = options ?? new IqToFmAudioOptions();

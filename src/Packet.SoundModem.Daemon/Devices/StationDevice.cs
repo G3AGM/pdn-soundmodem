@@ -217,6 +217,15 @@ internal sealed class DeviceOpening
     /// </summary>
     public Packet.SoundModem.Rig.IReceiverTuner? Tuner { get; init; }
 
+    /// <summary>
+    /// A running count of the places the device's input lost audio or was not continuous, for a
+    /// device that knows and is not one of the two the station already asks (a sound card's
+    /// xruns, a Flex's lost DAX packets): an IQ front end channel's
+    /// <see cref="Packet.SoundModem.Iq.IqReceiverChannel.Discontinuities"/>. Null where there is
+    /// nothing to count.
+    /// </summary>
+    public Func<long>? InputLossCount { get; init; }
+
     /// <summary>The sound card's playback stream, on ALSA.</summary>
     public AlsaAudioOutput? AlsaOut { get; init; }
 

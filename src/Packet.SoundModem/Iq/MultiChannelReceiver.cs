@@ -16,6 +16,10 @@ namespace Packet.SoundModem.Iq;
 /// <see cref="ChannelSpec.AudioCentreHz"/> (0 = baseband real part, which reproduces the audio a
 /// receiver tuned to the channel centre would deliver). The per-sample DDC path is
 /// allocation-free; <see cref="Pump"/> uses pre-sized scratch and per-channel ring buffers.
+/// <para>For a live source, use <see cref="IqReceiver"/>: it decimates before it filters, so a
+/// 2.4 MS/s source is affordable, takes rates that are no multiple of the DSP rate, demodulates
+/// SSB and FM, and acts on the retunes and gaps a source reports. This class stays for what
+/// already uses it.</para>
 /// </remarks>
 public sealed class MultiChannelReceiver
 {
