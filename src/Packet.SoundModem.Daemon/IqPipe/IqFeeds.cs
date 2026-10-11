@@ -102,12 +102,22 @@ internal sealed class ChildProcessIqFeedLauncher(
         return new ChildProcessIqFeed(process, ProgramName(line), journal, timeProvider);
     }
 
-    /// <summary>The first word of a command line, for prefixing its lines.</summary>
+    /// <summary>The program a command line runs, for prefixing its lines: the first word that
+    /// is not <c>exec</c> or a <c>NAME=value</c> setting, without its directory.</summary>
     internal static string ProgramName(string line)
     {
-        string first = line.TrimStart().Split(' ', 2)[0];
-        int slash = first.LastIndexOf('/');
-        return slash >= 0 ? first[(slash + 1)..] : first;
+        foreach (string word in line.Split(' ', StringSplitOptions.RemoveEmptyEntries))
+        {
+            if (word == "exec" || word.Contains('=', StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            int slash = word.LastIndexOf('/');
+            return slash >= 0 ? word[(slash + 1)..] : word;
+        }
+
+        return "the command";
     }
 }
 
@@ -287,6 +297,7 @@ internal sealed class FifoIqFeedLauncher(string path) : IIqFeedLauncher
         // The open blocks until a writer comes. Whoever cancels wakes it by opening the far end
         // themselves (FifoIqFeed.Wake), which is the only thing that ends a FIFO open.
         using CancellationTokenRegistration wake = cancellation.Register(() => FifoIqFeed.Wake(path));
+        cancellation.ThrowIfCancellationRequested();
         FileStream stream;
         try
         {

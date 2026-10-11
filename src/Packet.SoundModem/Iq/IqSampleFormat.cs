@@ -23,7 +23,7 @@ public enum IqSampleFormat
 /// <summary>Reading <see cref="IqSampleFormat"/>s into the interleaved floats an
 /// <c>IIqSource</c> hands out, full scale -1 to 1 on each axis.</summary>
 /// <remarks>
-/// <para>CU8 maps 0 to -1 and 255 to +1 (<c>b / 127.5 - 1</c>), as csdr's
+/// <para>CU8 maps 0 to -1 and 255 to +1 (<c>(b - 127.5) / 127.5</c>), the mapping csdr's
 /// <c>convert_u8_f</c> does, so a dongle's IQ has no DC offset of the conversion's own. CS8 and
 /// CS16 divide by 128 and 32768, so the most negative code is exactly -1. CF32 is taken as it
 /// comes.</para>
@@ -85,7 +85,7 @@ public static class IqSampleFormats
             case IqSampleFormat.Cu8:
                 for (int k = 0; k < values; k++)
                 {
-                    interleaved[k] = (bytes[k] / 127.5f) - 1f;
+                    interleaved[k] = (bytes[k] - 127.5f) / 127.5f;
                 }
 
                 break;
