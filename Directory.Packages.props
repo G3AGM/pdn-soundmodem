@@ -5,8 +5,8 @@
 
     <!-- FlexRadio 6000-series client (lifted out of this repo; AGPL-3.0-or-later). The same
          licence as this repo; see LICENSING.md and PROVENANCE.md. -->
-    <PackageVersion Include="M0LTE.Flex" Version="0.14.1" />
-    <PackageVersion Include="M0LTE.Radio.Audio" Version="0.1.0" />
+    <PackageVersion Include="M0LTE.Flex" Version="0.15.0" />
+    <PackageVersion Include="M0LTE.Radio.Audio" Version="0.1.1" />
     <PackageVersion Include="M0LTE.Fec" Version="0.3.0" />
     <PackageVersion Include="M0LTE.Il2p" Version="0.3.0" />
     <PackageVersion Include="M0LTE.Ardop" Version="0.6.0" />
