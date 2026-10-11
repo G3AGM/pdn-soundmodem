@@ -184,13 +184,13 @@ public sealed class SoundCardIqSourceTests
         double offset = 6000;
         float[] wanted = IqSynth.Resample(audio, sim.Rate, Rate);
         var iq = new float[2 * wanted.Length];
-        AddSsb(iq, wanted, offset, lsb, 0.01);
+        CardSynth.AddSsb(iq, wanted, Rate, offset, lsb, 0.01);
 
         // The interferer: the same kind of signal, 34 dB up, on the mirror of the dial.
         (float[] other, _, _) = IqReceiverTests.Burst("bpsk300", seed: 10);
-        AddSsb(iq, IqSynth.Resample(other, sim.Rate, Rate), -offset, !lsb, 0.5);
+        CardSynth.AddSsb(iq, IqSynth.Resample(other, sim.Rate, Rate), Rate, -offset, !lsb, 0.5);
 
-        short[] pcm = Unbalance(iq, 0.5, 3.0);
+        short[] pcm = CardSynth.Card(iq, 0.5, 3.0);
         var spec = new IqChannelSpec
         {
             OffsetHz = offset,
@@ -257,7 +257,7 @@ public sealed class SoundCardIqSourceTests
             iq[(2 * k) + 1] = (float)(0.5 * Math.Sin(t));
         }
 
-        return Unbalance(iq, gainDb, phaseDegrees);
+        return CardSynth.Card(iq, gainDb, phaseDegrees);
     }
 
     /// <summary>Complex white noise through a card with the given mismatch.</summary>
@@ -265,70 +265,7 @@ public sealed class SoundCardIqSourceTests
     {
         var iq = new float[2 * (int)(seconds * Rate)];
         IqSynth.AddNoise(iq, 0.05, seed);
-        return Unbalance(iq, gainDb, phaseDegrees);
-    }
-
-    /// <summary>What a card with Q <paramref name="gainDb"/> louder and <paramref name="phaseDegrees"/>
-    /// off quadrature makes of ideal IQ, as 16-bit pairs: <c>I = Re</c>, and for <c>Re = cos t</c>,
-    /// <c>Im = sin t</c>, <c>Q = g sin(t + phi) = g (Im cos phi + Re sin phi)</c>.</summary>
-    private static short[] Unbalance(float[] iq, double gainDb, double phaseDegrees)
-    {
-        double g = Math.Pow(10, gainDb / 20);
-        double phi = phaseDegrees * Math.PI / 180;
-        var pcm = new short[iq.Length];
-        for (int k = 0; k < iq.Length; k += 2)
-        {
-            double i = iq[k];
-            double q = g * ((iq[k + 1] * Math.Cos(phi)) + (iq[k] * Math.Sin(phi)));
-            pcm[k] = Pcm(i);
-            pcm[k + 1] = Pcm(q);
-        }
-
-        return pcm;
-    }
-
-    private static short Pcm(double v) => (short)Math.Clamp(Math.Round(v * 32768), short.MinValue, short.MaxValue);
-
-    /// <summary>Adds real audio as a single-sideband signal with its dial at
-    /// <paramref name="dialHz"/>: above the dial for USB, mirrored below it for LSB.</summary>
-    private static void AddSsb(float[] iq, float[] audio, double dialHz, bool lsb, double amplitude)
-    {
-        // The analytic signal of the audio, by a Hilbert FIR, then shifted to the dial.
-        const int taps = 255;
-        const int mid = taps / 2;
-        var h = new double[taps];
-        for (int k = 0; k < taps; k++)
-        {
-            int m = k - mid;
-            double window = 0.42 - (0.5 * Math.Cos(2 * Math.PI * k / (taps - 1))) + (0.08 * Math.Cos(4 * Math.PI * k / (taps - 1)));
-            h[k] = m % 2 == 0 ? 0 : 2 / (Math.PI * m) * window;
-        }
-
-        int n = Math.Min(audio.Length, iq.Length / 2);
-        for (int k = 0; k < n; k++)
-        {
-            double re = k >= mid ? audio[k - mid] : 0;
-            double im = 0;
-            for (int j = 0; j < taps; j++)
-            {
-                int at = k - j;
-                if (at >= 0 && h[j] != 0)
-                {
-                    im += h[j] * audio[at];
-                }
-            }
-
-            if (lsb)
-            {
-                im = -im;
-            }
-
-            double w = 2 * Math.PI * dialHz * k / Rate;
-            double c = Math.Cos(w);
-            double s = Math.Sin(w);
-            iq[2 * k] += (float)(amplitude * ((re * c) - (im * s)));
-            iq[(2 * k) + 1] += (float)(amplitude * ((re * s) + (im * c)));
-        }
+        return CardSynth.Card(iq, gainDb, phaseDegrees);
     }
 
     /// <summary>A card that plays back a fixed recording of 16-bit pairs, with an overrun on cue.</summary>
