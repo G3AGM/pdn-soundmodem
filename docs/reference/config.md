@@ -40,7 +40,7 @@ In the order `DaemonConfig` declares them. `sideband`, `dialFrequency` and each 
 
 | Key | Type | Default | What it is |
 |---|---|---|---|
-| `device` | string | `"default"` | The audio input and output: an ALSA name, `null`, `pipe:`, `flex:`, `ubersdr:`, `openwebrx:`, `iqcard:`, `rtltcp:` or `iqpipe:`. |
+| `device` | string | `"default"` | The audio input and output: an ALSA name, `null`, `pipe:`, `flex:`, `ubersdr:`, `openwebrx:`, `iqcard:`, `rtltcp:`, `sdrconnect:` or `iqpipe:`. |
 | `captureDevice` | string | absent: `device` | The sound card to receive from, when it is not `device`. See [Two cards](#two-cards-capturedevice-and-playbackdevice). |
 | `playbackDevice` | string | absent: `device` | The sound card to transmit through, when it is not `device`. See [Two cards](#two-cards-capturedevice-and-playbackdevice). |
 | `captureRate` | int | `48000` | ALSA capture and playback rate in Hz; the modem decimates to its DSP rate. |
@@ -65,6 +65,7 @@ In the order `DaemonConfig` declares them. `sideband`, `dialFrequency` and each 
 | `ubersdr` | object | absent: defaults | Stream parameters for a public UberSDR web receiver. |
 | `openwebrx` | object | absent: defaults | Stream parameters for a public OpenWebRX or OpenWebRX+ receiver. |
 | `rtltcp` | object | absent: defaults | Settings for an RTL-SDR behind rtl_tcp, or OpenWebRX's rtl_tcp-compatible port. |
+| `sdrconnect` | object | absent: defaults | Settings for an SDRplay radio through SDRconnect's WebSocket API. |
 | `iqpipe` | object | absent; required for `iqpipe:` | What the raw IQ of an `iqpipe:` device is, and the command that makes it. |
 | `waterfall` | object | absent: no page | The station page: spectrum, waterfall, frames, links, and the HTTP listener that `api` and `metrics` share. |
 | `monitor` | object | absent: not a monitor | Turns the process into a monitor site fronting many web receivers. Exclusive with `device`. |
@@ -94,10 +95,11 @@ In the order `DaemonConfig` declares them. `sideband`, `dialFrequency` and each 
 | `openwebrx:<url>` | A public OpenWebRX or OpenWebRX+ receiver's demodulated audio, receive only. The URL you would open in a browser, path included; a bare host or `host:port` is taken as `http` on port 8073. |
 | `iqcard:<alsa device>` | IQ on a sound card's left and right inputs (a Xiegu G90, a SoftRock), receive only. See [`iqCard`](#iqcard). |
 | `rtltcp:<host>[:<port>]` | An rtl_tcp server's raw IQ, demodulated here, receive only: an RTL-SDR dongle behind `rtl_tcp`, or OpenWebRX's rtl_tcp-compatible port. The port defaults to 1234; an IPv6 address goes in brackets. |
+| `sdrconnect:<host>[:<port>]` | An SDRplay radio through SDRconnect's WebSocket API, its IQ demodulated here or its own audio, receive only. The port defaults to 5454; an IPv6 address goes in brackets. |
 | `iqpipe:`, `iqpipe:<fifo>`, `iqpipe:-` | Raw IQ from an SDR, receive only: the standard output of `iqpipe.command` (`rx_sdr`, `rtl_sdr`), a FIFO another program writes, or standard input. See [`iqpipe`](#iqpipe). |
 
 - `captureRate` applies to ALSA and pipe devices only. It must be a multiple of the channel's DSP rate (12000, or 48000 when any 48 kHz mode is configured), or start-up refuses with `--capture-rate must be a multiple of N`. A pipe's own rate has the same rule: `pipe rate N is not a multiple of the channel's N Hz`.
-- A `flex:`, `ubersdr:`, `openwebrx:`, `rtltcp:` or `iqpipe:` device provides its own clock; `captureRate` is ignored. So does `iqcard:`, whose rate is `iqCard`.`sampleRate`.
+- A `flex:`, `ubersdr:`, `openwebrx:`, `rtltcp:`, `sdrconnect:` or `iqpipe:` device provides its own clock; `captureRate` is ignored. So does `iqcard:`, whose rate is `iqCard`.`sampleRate`.
 - A device that will not open exits 1 with a message naming the key and the file, and the service retries.
 
 ### Two cards: `captureDevice` and `playbackDevice`
@@ -256,7 +258,7 @@ The short form: every packet modem in `modems` goes behind port 8120, the first 
 
 - Omit the whole section for a radio keyed by VOX, or one that has no keying line. A FlexRadio keys itself and a web receiver has no transmitter.
 - `"rigctld"` takes no other key here; it keys through the `rig` section's rigctld and is refused without one (`"ptt": {"type": "rigctld"} keys the radio through the "rig" section's rigctld, and this file has no "rig" section`). It is config-file only; the `--ptt` flag has no form for it.
-- Refused: a `type` other than `serial`, `cm108` or `rigctld` (`unknown ptt type 'X'`); any `ptt` with a `flex:` device (`--device flex: keys the radio itself; remove the conflicting --ptt (serial:/cm108:)`); any `ptt` with a `ubersdr:`, `openwebrx:` or `rtltcp:` device (`--device ubersdr: is a receive-only station ... Remove "ptt".`).
+- Refused: a `type` other than `serial`, `cm108` or `rigctld` (`unknown ptt type 'X'`); any `ptt` with a `flex:` device (`--device flex: keys the radio itself; remove the conflicting --ptt (serial:/cm108:)`); any `ptt` with a `ubersdr:`, `openwebrx:`, `rtltcp:` or `sdrconnect:` device (`--device ubersdr: is a receive-only station ... Remove "ptt".`).
 - A device that cannot be opened exits 1, with the file, the key, an `ls` to run and the udev note for `/dev/hidraw*`, and the service retries. The [`--ptt` flag](command-line.md#station-flags) replaces this section.
 - Without a `ptt` the transmitter test is refused: `tx test: unavailable - no "ptt" is configured, so this daemon does not key the radio`.
 
@@ -415,7 +417,7 @@ A test asked for through `POST /api/txtest` can follow its tone with a channel-s
 { "rig": { "rigctld": "127.0.0.1:4532", "mode": "PKTUSB" }, "ptt": { "type": "rigctld" } }
 ```
 
-A radio controlled through Hamlib's `rigctld`, for any device but `flex:`, `ubersdr:`, `openwebrx:` and `rtltcp:`. Absent, nothing talks to a rig and the station is as it always was.
+A radio controlled through Hamlib's `rigctld`, for any device but `flex:`, `ubersdr:`, `openwebrx:`, `rtltcp:` and `sdrconnect:`. Absent, nothing talks to a rig and the station is as it always was.
 
 | Key | Type | Default | What it is |
 |---|---|---|---|
@@ -433,7 +435,7 @@ A radio controlled through Hamlib's `rigctld`, for any device but `flex:`, `uber
 - rigctld started with `--vfo` is not supported: the station says so (`rigctld was started with --vfo, which this station does not speak`) and keeps retrying. Start it without `--vfo`.
 - With `ptt` `rigctld`, the `T 1` round trip over CAT (often 20 to 100 ms, more on a slow serial link) comes out of TXDELAY, because the preamble starts as soon as rigctld answers. Allow for it if the far end misses the start of your frames.
 - A `T 1` that fails is followed at once by `T 0`. An unkey rigctld does not confirm is retried every second with a warning each time, and nothing is keyed or retuned until it goes.
-- Refused: `rig` with a `flex:`, `ubersdr:`, `openwebrx:` or `rtltcp:` device; a `rigctld` that is not `host:port`; a `mode` outside `USB`, `PKTUSB`, `LSB`, `PKTLSB`, `FM`, `FMN`, `PKTFM`, `PKTFMN` (other Hamlib modes are for tuning windows only), or one that disagrees with `sideband`; a `passbandHz` below 0 or above 20000.
+- Refused: `rig` with a `flex:`, `ubersdr:`, `openwebrx:`, `rtltcp:` or `sdrconnect:` device; a `rigctld` that is not `host:port`; a `mode` outside `USB`, `PKTUSB`, `LSB`, `PKTLSB`, `FM`, `FMN`, `PKTFM`, `PKTFMN` (other Hamlib modes are for tuning windows only), or one that disagrees with `sideband`; a `passbandHz` below 0 or above 20000.
 - `POST /api/rig/tune` and `GET /api/rig` need an [`api`](#api) key; see [rig tuning windows](ports-and-endpoints.md#rig-tuning-windows).
 - The rigctld connection has no authentication, which is rigctld's own design. Keep it on loopback or a trusted network.
 
@@ -606,6 +608,38 @@ Read for an `rtltcp:` device. Ignored otherwise. The server sends raw IQ and thi
 - With `readOnly`, a stream that stops arriving at `sampleRate` (measured against the clock over five-second windows) is taken as a profile switch: its samples are dropped until the rate is right again, and the journal says so. A switch to another band at the same rate cannot be told for certain; a sudden lasting change in the stream's level or shape is said in the journal as a warning, and nothing else is done.
 - Refused, exit 2: `readOnly` without `centreFrequency` or `sampleRate`; `gainDb`, `ppm` or `rtlAgc` with `readOnly`; `centreFrequency` without it; a controlled `sampleRate` no dongle runs at; `gainDb` outside 0 to 60; `ppm` beyond 1000 either way; a `noDataSeconds`, `gain`, `fmIfBandwidthHz` or `fmDeviationHz` of 0 or less; `ssbLowHz` and `ssbHighHz` that do not rise from 0; any `ptt`, `rig`, `alsa.mixer` or `identify`, each named under its own section.
 - The station receives only. A server that cannot be reached at start-up exits 1 and the service retries.
+
+## `sdrconnect`
+
+```json
+{ "device": "sdrconnect:shack-pc.local", "sdrconnect": { "mode": "iq", "lnaState": 4 } }
+```
+
+Read for an `sdrconnect:` device. Ignored otherwise. The station talks to SDRplay's SDRconnect (the desktop program or its headless build) over its WebSocket API, version 1.0.3, on port 5454 unless the device string gives another. With `"mode": "iq"` SDRconnect sends raw IQ and this station demodulates it, so the SSB and FM keys are the station's own filter; with `"mode": "audio"` SDRconnect demodulates, and they are the filter SDRconnect is asked for. The demodulator follows the band plan's sideband: `usb`, `lsb`, or FM for `"sideband": "fm"`.
+
+| Key | Type | Default | What it is |
+|---|---|---|---|
+| `mode` | string | `"iq"` | `"iq"`: SDRconnect's IQ at the radio's sample rate, about 64 Mbit/s at 2 MS/s, demodulated here; wants a wired link. `"audio"`: SDRconnect's own demodulated audio, 48 kHz, about 1.5 Mbit/s; suits Wi-Fi. |
+| `sampleRate` | int | `2000000` for `"iq"`; SDRconnect's own for `"audio"` | The radio's sample rate to ask for, 48000 to 20000000. Whatever SDRconnect reports is the rate used. |
+| `lnaState` | int | absent: SDRconnect's own | The RF gain state to ask for. The start-up lines give the range the radio offers; one outside it is said and not sent. |
+| `antenna` | string | absent: SDRconnect's own | The antenna to select, by the name SDRconnect gives it. One SDRconnect does not list is said and not sent. |
+| `deviceSerial` | string | absent: the radio SDRconnect has selected | Which radio, by serial number, when SDRconnect has more than one. |
+| `deviceName` | string | absent | Which radio, by SDRconnect's display name for it. Not with `deviceSerial`. |
+| `noDataSeconds` | number | `5` | Seconds a connected SDRconnect may send nothing before it is dropped and reconnected. |
+| `ssbLowHz` | number | `150` | Bottom of the SSB filter, Hz from the dial. With `"audio"` it is SDRconnect's SSB low cut. |
+| `ssbHighHz` | number | `3450` | Top of that filter. With `"audio"` it is asked for as SDRconnect's filter bandwidth, at most 24000. |
+| `fmIfBandwidthHz` | number | `16000` for `"iq"`, `12500` for `"audio"` | The FM filter's whole width about the carrier, Hz. With `"audio"` it is held to SDRconnect's widest. |
+| `fmDeviationHz` | number | `3000` | `"iq"` only: the FM deviation heard as full scale, Hz. |
+| `gain` | number | `1.0` | Linear gain on the demodulated audio. |
+
+- The receiver is tuned by the band plan: every modem needs an `rfFrequency`, or `dialFrequency` must be set (`SDRconnect at X has to be told where to listen ...`).
+- At every connect the station asks SDRconnect what it has and says it in the journal (API version, the radio and the radios there are, whether this client may control it, whether it is running, the sample rate, the LO, the gain state and its range, the antennas), then sets the radio up: starts it if it was stopped, the gain and antenna if given, the sample rate, the LO 25 kHz below the dial, and for `"audio"` the demodulator, the VFO on the dial and the filter, with SDRconnect's AGC, noise reduction, squelch, audio limiters and audio filters turned off (and NFM de-emphasis, so FM audio is flat as a radio's data port gives it). The rate and the LO the stream is taken to be at are what SDRconnect reports, not what was asked for.
+- A change to the LO, the VFO or the demodulator that the station did not make (someone in the SDRconnect window) is said in the journal and put back. A new sample rate is taken as SDRconnect has it.
+- SDRconnect's stream carries no frame counter. The station throws away 100 ms after every reported change of tuning, since the stream does not say where it landed, and measures the stream against the clock: while it arrives short of its rate the journal says the link or the machine cannot keep up, and the shortfall is marked in the audio as gaps.
+- An SDRconnect that drops or goes quiet for `noDataSeconds` is reconnected and set up again, and the time it was gone is marked in the audio as a gap. One unreachable for five minutes stops the process with exit 1, and the service retries.
+- Not yet checked against a real SDRconnect: whether it accepts connections from other machines without a setting being changed, the sample rates it accepts, the range its IQ uses (taken as full 16-bit scale, so only the level could be off), and how `filter_bandwidth` and the SSB low cut combine (the top of the passband is asked for as the bandwidth, which is right or a little wide).
+- Refused, exit 2: a `mode` other than `iq` or `audio`; a `sampleRate` outside 48000 to 20000000; a negative `lnaState`; both `deviceSerial` and `deviceName`; an empty `deviceSerial`, `deviceName` or `antenna`; a `noDataSeconds`, `gain`, `fmIfBandwidthHz` or `fmDeviationHz` of 0 or less; `ssbLowHz` and `ssbHighHz` that do not rise from 0, or with `"audio"` a `ssbHighHz` above 24000; `fmDeviationHz` with `"audio"`; any `ptt`, `rig`, `alsa.mixer` or `identify`, each named under its own section.
+- The station receives only. SDRconnect that cannot be reached at start-up exits 1 and the service retries; one that says this client may not control the radio (`can_control` false) exits 1 with that said.
 
 ## `iqpipe`
 
@@ -850,6 +884,7 @@ Per-device defaults, used for whichever key is absent:
 | `ubersdr:` | 30 | 30 |
 | `openwebrx:` | 30 | 30 |
 | `rtltcp:` | 30 | 30 |
+| `sdrconnect:` | 30 | 30 |
 | ALSA sound card, `pipe:` | 0 (off) | 30 |
 | `--wav-loop`, `flex:mock` | 0 (off) | 0 (off) |
 | an uplinked station on a monitor | 0 (off) | 30 |

@@ -20,6 +20,7 @@ By the end of this page you will know which `device` string and which `ptt` bloc
 | A public OpenWebRX or OpenWebRX+ receiver | `openwebrx:http://sdr.example.org:8073/` |
 | A radio's IQ output into a stereo sound card (Xiegu G90, SoftRock), receive only | `iqcard:plughw:CARD=Device,DEV=0`; see [hardware/iq-sound-card.md](hardware/iq-sound-card.md) |
 | An RTL-SDR dongle behind `rtl_tcp`, or your own OpenWebRX's rtl_tcp-compatible port | `rtltcp:pi.local:1234` |
+| An SDRplay radio on a PC running SDRconnect | `sdrconnect:shack-pc.local` |
 | Two FIFOs standing in for a card | `pipe:/tmp/in,/tmp/out` |
 | Nothing at all | `null` |
 
@@ -244,6 +245,37 @@ An OpenWebRX or OpenWebRX+ you run can republish its SDR's raw IQ on an rtl_tcp-
 - If the profile is switched anyway, the station cannot be told. A switch to a different sample rate is caught within about fifteen seconds: the samples are dropped until the rate is right again, and the journal says so. A switch to another band at the same rate cannot be caught for certain; a sudden lasting change in the stream is said in the journal as a warning, and the station goes on decoding whatever the SDR now hears.
 - 8 bits a sample is plenty with the SDR's gain set so the noise sits well clear of the bottom: in simulation it costs nothing measurable against float IQ.
 
+## SDRconnect on another PC
+
+If an SDRplay radio is plugged into a PC that runs SDRplay's SDRconnect, the station can listen through SDRconnect over the network. SDRconnect keeps the radio; the station connects to SDRconnect's WebSocket API on port 5454 and tunes it from the band plan. Point `device` at the PC:
+
+```json
+{
+  "device": "sdrconnect:shack-pc.local",
+  "sideband": "usb",
+  "modems": [ { "mode": "bpsk300", "subChannel": 0, "rfFrequency": 7048800 } ]
+}
+```
+
+On the PC with the radio:
+
+- SDRconnect has to be running, with the radio selected and started. SDRconnect supports every RSP except the original RSP1 (the RSP1A and later are fine).
+- The station connects to port 5454 on that PC, so the PC's firewall has to let the station's machine in on that port. On Windows, allow SDRconnect through Windows Defender Firewall for private networks when it asks, or add an inbound rule for TCP port 5454.
+- Whether SDRconnect accepts connections from other machines out of the box, and where in SDRconnect its WebSocket API is turned on if it is not, has not yet been checked against a real SDRconnect. If the station cannot connect, that is the first place to look.
+
+Pick the stream with `"sdrconnect"."mode"`:
+
+- `"iq"` (the default) takes SDRconnect's raw IQ, and the station's own filter and demodulator do the rest, as on every other SDR. SDRconnect sends it at the radio's full sample rate, 2 MS/s by default, which is about 64 Mbit/s on the network: use wired Ethernet between the two machines.
+- `"audio"` takes SDRconnect's own demodulated audio, about 1.5 Mbit/s, which a Wi-Fi link carries easily. The filter and the demodulator are then SDRconnect's. The station sets them (USB, LSB or NFM from the band plan, on the dial) and turns off SDRconnect's AGC, noise reduction, squelch and audio filters, so what arrives is the demodulator's output and nothing else.
+
+What to expect:
+
+- The station tunes the radio: the LO 25 kHz below the dial, so its DC spike stays out of the channel. Leave the frequency alone in the SDRconnect window while the station is listening; a change made there is put back, and the journal says so.
+- It is receive only: no `ptt`, no `rig`, no transmitter test.
+- At start-up the journal says what SDRconnect reported: its API version, the radio, its sample rate, the antennas and the gain range. Those lines are the ones to send when asking for help.
+- If SDRconnect goes away or goes quiet for five seconds, the station reconnects, sets the radio up again and marks the time it was gone as a gap. After five minutes without it, the service restarts.
+- Every key is in [`sdrconnect`](reference/config.md#sdrconnect).
+
 ## A web receiver
 
 With no antenna at all, point `device` at a public UberSDR web receiver and the station receives over the internet. It is receive only: no `ptt`, no transmitter test, and frames sent to it over KISS are dropped. Every modem needs an `rfFrequency`, or `dialFrequency` must be set, so the receiver knows where to tune. [09-web-receivers.md](09-web-receivers.md) covers the rest.
@@ -265,9 +297,11 @@ You want one `audio:` line naming your device, and one `ptt:` line if you config
 
 `cannot open the cm108 PTT device "..."` with `Access to the path '/dev/hidraw0' is denied.` under it means the udev rule is missing or has the wrong IDs. Add it, replug, restart.
 
-`--device flex: keys the radio itself; remove the conflicting --ptt (serial:/cm108:)` means what it says. Delete the `ptt` section. The same goes for `ubersdr:`, `openwebrx:` and `rtltcp:`, which have no transmitter.
+`--device flex: keys the radio itself; remove the conflicting --ptt (serial:/cm108:)` means what it says. Delete the `ptt` section. The same goes for `ubersdr:`, `openwebrx:`, `rtltcp:` and `sdrconnect:`, which have no transmitter.
 
 `cannot listen through "rtltcp:..."` means the rtl_tcp server is not running, is listening only on its own machine (start it with `-a 0.0.0.0`), or another client has it. The service keeps retrying.
+
+`cannot listen through "sdrconnect:..."` means SDRconnect is not running on that PC, the radio is not started in it, or the PC's firewall is keeping the station out of port 5454. The service keeps retrying.
 
 `rig: WARNING - cannot reach rigctld at ...` means rigctld is not running, or is on another port. Start it, and the station picks it up within half a minute.
 
@@ -282,4 +316,4 @@ Anything else in the journal is in [12-troubleshooting.md](12-troubleshooting.md
 - [07-station-page.md](07-station-page.md) for the mixer, the meters and the transmitter test in the browser.
 - [08-hf.md](08-hf.md) for SSB, band plans and where the dial goes.
 - [hardware/tait-tm8100-cm108.md](hardware/tait-tm8100-cm108.md) for wiring an interface to a TM8100.
-- [reference/config.md](reference/config.md) for `device`, `ptt`, `alsa`, `flex`, `rig`, `ubersdr` and `rtltcp` key by key.
+- [reference/config.md](reference/config.md) for `device`, `ptt`, `alsa`, `flex`, `rig`, `ubersdr`, `rtltcp` and `sdrconnect` key by key.
