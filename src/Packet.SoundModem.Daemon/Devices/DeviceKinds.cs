@@ -82,9 +82,12 @@ internal static class DeviceKinds
     /// <summary>Raw IQ from a command, a FIFO or standard input, receive only.</summary>
     public static readonly DeviceKind IqPipe = new IqPipeDeviceKind();
 
+    /// <summary>SDRplay's SDRconnect over its WebSocket API, receive only.</summary>
+    public static readonly DeviceKind SdrConnect = new SdrConnectDeviceKind();
+
     /// <summary>Every kind, in the order a device string is tried against them; the sound card
     /// is last because it claims everything.</summary>
-    public static IReadOnlyList<DeviceKind> All { get; } = [Pipe, UberSdr, OpenWebRx, IqCard, RtlTcp, Flex, IqPipe, Alsa];
+    public static IReadOnlyList<DeviceKind> All { get; } = [Pipe, UberSdr, OpenWebRx, IqCard, RtlTcp, SdrConnect, Flex, IqPipe, Alsa];
 
     /// <summary>The kind <paramref name="device"/> names.</summary>
     public static DeviceKind Of(string device)

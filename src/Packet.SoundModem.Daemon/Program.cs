@@ -190,6 +190,7 @@ UberSdrConfig? uberSdrConfig = null;
 OpenWebRxConfig? openWebRxConfig = null;
 IqCardConfig? iqCardConfig = null;
 RtlTcpConfig? rtlTcpConfig = null;
+SdrConnectConfig? sdrConnectConfig = null;
 IqPipeConfig? iqPipeConfig = null;
 WaterfallConfig? waterfallConfig = null;
 PublishConfig? publishConfig = null;
@@ -264,6 +265,7 @@ if (configPath is not null)
     openWebRxConfig = config.OpenWebRx;
     iqCardConfig = config.IqCard;
     rtlTcpConfig = config.RtlTcp;
+    sdrConnectConfig = config.SdrConnect;
     iqPipeConfig = config.IqPipe;
     waterfallConfig = config.Waterfall;
     publishConfig = config.Publish;
@@ -587,6 +589,7 @@ try
         {
             RtlTcp = rtlTcpConfig,
             IqPipe = iqPipeConfig,
+            SdrConnect = sdrConnectConfig,
         });
 }
 catch (InvalidDataException malformed)

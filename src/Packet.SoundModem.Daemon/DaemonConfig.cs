@@ -1695,6 +1695,10 @@ public sealed class DaemonConfig
     /// other device.</summary>
     public RtlTcpConfig? RtlTcp { get; set; }
 
+    /// <summary>SDRconnect settings (Device <c>sdrconnect:</c>); null = defaults. Ignored for every
+    /// other device.</summary>
+    public SdrConnectConfig? SdrConnect { get; set; }
+
     /// <summary>Browser waterfall endpoint; null = disabled.</summary>
     public WaterfallConfig? Waterfall { get; set; }
 
@@ -2896,6 +2900,7 @@ public sealed class DaemonConfig
         Unknown("openwebrx", config.OpenWebRx?.UnknownSettings);
         Unknown("iqCard", config.IqCard?.UnknownSettings);
         Unknown("rtltcp", config.RtlTcp?.UnknownSettings);
+        Unknown("sdrconnect", config.SdrConnect?.UnknownSettings);
         Unknown("iqpipe", config.IqPipe?.UnknownSettings);
         Unknown("frameLog", config.FrameLog?.UnknownSettings);
         Unknown("survey", config.Survey?.UnknownSettings);

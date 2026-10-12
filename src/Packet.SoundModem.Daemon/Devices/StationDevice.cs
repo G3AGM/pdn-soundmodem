@@ -128,6 +128,9 @@ internal sealed record DeviceSettings(
 
     /// <summary>The <c>"iqpipe"</c> section, or null.</summary>
     public IqPipeConfig? IqPipe { get; init; }
+
+    /// <summary>The <c>"sdrconnect"</c> section, or null.</summary>
+    public SdrConnectConfig? SdrConnect { get; init; }
 }
 
 /// <summary>

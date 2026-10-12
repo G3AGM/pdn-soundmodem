@@ -40,7 +40,9 @@ internal static class Usage
                                   such as plughw:CARD=Device,DEV=0, pipe:IN,OUT[,RATE],
                                   flex:RADIO[:SLICE][@STATION], ubersdr:INSTANCE,
                                   openwebrx:URL, iqcard:DEVICE (IQ on a card's left and
-                                  right inputs), rtltcp:HOST[:PORT] or iqpipe:[FIFO|-].
+                                  right inputs), rtltcp:HOST[:PORT],
+                                  sdrconnect:HOST[:PORT] (SDRplay's SDRconnect) or
+                                  iqpipe:[FIFO|-].
           --capture-rate HZ       ALSA capture and playback rate (default 48000); it
                                   must be a multiple of the modems' DSP rate, 12000 or
                                   48000.
@@ -53,8 +55,8 @@ internal static class Usage
                                   all the station runs afsk1200 on sub-channel 0.
           --ptt SPEC              How the radio is keyed: serial:DEVICE[:rts|:dtr] or
                                   cm108:HIDRAW[:GPIO]. The line defaults to rts and the
-                                  GPIO to 3. Refused with flex:, ubersdr:, openwebrx:
-                                  and rtltcp: devices, which need none.
+                                  GPIO to 3. Refused with flex:, ubersdr:, openwebrx:,
+                                  rtltcp: and sdrconnect: devices, which need none.
           --txdelay MS            PTT-to-data delay in ms, for a bench run with no KISS
                                   host to set it. No config-file equivalent.
           --wav FILE              Decode a recording instead of live audio, print the
