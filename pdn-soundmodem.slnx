@@ -15,6 +15,7 @@
     <Project Path="tools/Packet.SoundModem.QtsmBench/Packet.SoundModem.QtsmBench.csproj" />
     <Project Path="tools/Packet.SoundModem.Samples/Packet.SoundModem.Samples.csproj" />
     <Project Path="tools/Packet.SoundModem.TncTest/Packet.SoundModem.TncTest.csproj" />
+    <Project Path="tools/Packet.SoundModem.SdrConnectProbe/Packet.SoundModem.SdrConnectProbe.csproj" />
     <Project Path="tools/Packet.SoundModem.Ota/Packet.SoundModem.Ota.csproj" />
     <Project Path="tools/Packet.SoundModem.UberSdr/Packet.SoundModem.UberSdr.csproj" />
   </Folder>

@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- A one-off field tool for #699: run on the Windows PC that runs SDRconnect, it measures what
+       the SDRconnect WebSocket API document leaves unsaid and writes a zip to send back. It has no
+       dependencies and is published Native AOT, so the operator gets one small exe and needs no
+       .NET installed:
+       dotnet publish tools/Packet.SoundModem.SdrConnectProbe -c Release -r win-x64
+       (Native AOT needs the platform's C toolchain: on Windows, Visual Studio's C++ tools.) -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>sdrconnect-probe</AssemblyName>
+    <IsPackable>false</IsPackable>
+    <PublishAot>true</PublishAot>
+    <OptimizationPreference>Size</OptimizationPreference>
+    <UseSystemResourceKeys>true</UseSystemResourceKeys>
+    <EventSourceSupport>false</EventSourceSupport>
+  </PropertyGroup>
+
+</Project>
