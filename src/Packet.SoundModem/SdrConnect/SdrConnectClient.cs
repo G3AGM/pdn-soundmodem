@@ -807,8 +807,10 @@ internal sealed class SdrConnectClient : IDisposable
             return;
         }
 
+        string? previous;
         lock (_stateGate)
         {
+            previous = _values.GetValueOrDefault(message.Property);
             _values[message.Property] = message.Value;
             if (_waiting.Remove(message.Property, out TaskCompletionSource<string>? waiter))
             {
@@ -864,7 +866,9 @@ internal sealed class SdrConnectClient : IDisposable
             case SdrConnectProtocol.Properties.Demodulator:
                 if (_options.Stream == SdrConnectStream.Audio)
                 {
-                    if (_streamOn)
+                    // A report of the one it had (the answer to a get, a put-back landing) is not
+                    // a change to the audio.
+                    if (_streamOn && !message.Value.Equals(previous, StringComparison.OrdinalIgnoreCase))
                     {
                         Moved();
                     }

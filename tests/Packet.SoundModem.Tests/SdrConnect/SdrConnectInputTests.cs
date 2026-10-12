@@ -150,6 +150,32 @@ public sealed class SdrConnectInputTests
         input.Client.ForeignChanges.Should().Be(0);
     }
 
+    [Fact]
+    public async Task A_Report_Of_The_Demodulator_SDRconnect_Already_Has_Is_Not_A_Hole_In_The_Audio()
+    {
+        using var host = new FakeSdrConnectHost();
+        Task<SdrConnectAudioInput> opening = SdrConnectAudioInput.OpenAsync(
+            FakeSdrConnectHost.Endpoint,
+            new SdrConnectOptions { CentreFrequencyHz = DialHz, WatchRate = false, RetuneSettle = TimeSpan.Zero, Journal = _journal.Enqueue },
+            new SdrConnectAudioChannel { Demodulator = "NFM", OutputRate = SdrConnectProtocol.AudioRate },
+            DialHz,
+            host.ConnectAsync,
+            TestContext.Current.CancellationToken);
+        FakeSdrConnect fake = await host.NextAsync();
+        using SdrConnectAudioInput input = await opening;
+        await fake.Streaming.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        await fake.SendAudioAsync(new short[2 * 4800]);
+        Read(input, SdrConnectProtocol.AudioRate, 0.1);
+
+        await fake.ChangeAsync("demodulator", "NFM");
+        await Task.Delay(200, TestContext.Current.CancellationToken);
+        await fake.SendAudioAsync(new short[2 * 4800]);
+        Read(input, SdrConnectProtocol.AudioRate, 0.1);
+
+        input.Discontinuities.Should().Be(0, "the demodulator did not change");
+        input.Client.ForeignChanges.Should().Be(0);
+    }
+
     /// <summary>The burst as SDRconnect's IQ: FM at <paramref name="offsetHz"/> from the LO, a
     /// little noise, at a quarter of full scale, as signed 16-bit pairs.</summary>
     private static short[] Iq(SimModem sim, byte[] frame, string mode, double offsetHz)
