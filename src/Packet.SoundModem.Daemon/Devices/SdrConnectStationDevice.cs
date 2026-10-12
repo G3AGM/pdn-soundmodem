@@ -256,7 +256,7 @@ internal sealed class SdrConnectStationDevice(
             + (context.DspRate == SdrConnectProtocol.AudioRate ? "" : $" -> {context.DspRate} Hz")
             + " (RECEIVE ONLY)");
         journal.Write("sdrconnect: SDRconnect demodulates on this stream, with its own filter; its AGC, noise "
-            + "reduction, squelch and audio filters have been turned off");
+            + "reduction, squelch and audio filters were asked to be off");
         return Opened(context, input, () => input.SessionLive, () => input.Discontinuities, input, lost => input.Lost += lost);
     }
 

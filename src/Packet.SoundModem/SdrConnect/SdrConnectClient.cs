@@ -1193,7 +1193,9 @@ internal sealed class SdrConnectClient : IDisposable
                     + $"not the {rate} it should. Frames are being lost on the way: the network link, or this "
                     + "machine, cannot keep up. "
                     + (_options.Stream == SdrConnectStream.Iq
-                        ? "The IQ stream needs a wired link; \"sdrconnect\".\"mode\": \"audio\" needs far less."
+                        ? "The IQ stream needs a wired link; \"sdrconnect\".\"mode\": \"audio\" needs far less. "
+                            + "If the link is wired and idle, SDRconnect's IQ may not be at the rate it reports, "
+                            + "which has not yet been checked against a real SDRconnect: please report it."
                         : "Check the link between this machine and SDRconnect.")
                     + " The missing time is marked as gaps.");
                 break;

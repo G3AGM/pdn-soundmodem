@@ -265,7 +265,7 @@ On the PC with the radio:
 
 Pick the stream with `"sdrconnect"."mode"`:
 
-- `"iq"` (the default) takes SDRconnect's raw IQ, and the station's own filter and demodulator do the rest, as on every other SDR. SDRconnect sends it at the radio's full sample rate, 2 MS/s by default, which is about 64 Mbit/s on the network: use wired Ethernet between the two machines.
+- `"iq"` (the default) takes SDRconnect's raw IQ, and the station's own filter and demodulator do the rest, as on every other SDR. The station asks for 2 MS/s unless told otherwise and takes the IQ to be at the sample rate SDRconnect reports; at 2 MS/s that is about 64 Mbit/s on the network: use wired Ethernet between the two machines.
 - `"audio"` takes SDRconnect's own demodulated audio, about 1.5 Mbit/s, which a Wi-Fi link carries easily. The filter and the demodulator are then SDRconnect's. The station sets them (USB, LSB or NFM from the band plan, on the dial) and turns off SDRconnect's AGC, noise reduction, squelch and audio filters, so what arrives is the demodulator's output and nothing else.
 
 What to expect:
