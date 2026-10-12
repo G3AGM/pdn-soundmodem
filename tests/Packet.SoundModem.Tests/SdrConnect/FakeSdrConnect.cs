@@ -116,6 +116,10 @@ internal sealed class FakeSdrConnect
     /// <summary>What a set value becomes, by property: SDRconnect choosing a rate of its own.</summary>
     public Dictionary<string, Func<string, string>> Coerce { get; } = new(StringComparer.Ordinal);
 
+    /// <summary>Whether a set is reported back to the client that made it, which the document does
+    /// not say; false stands for an SDRconnect that reports only other clients' changes.</summary>
+    public bool EchoSets { get; set; } = true;
+
     /// <summary>Every message the client sent, in order.</summary>
     public ConcurrentQueue<SdrConnectMessage> Received { get; } = new();
 
@@ -284,7 +288,11 @@ internal sealed class FakeSdrConnect
                     Properties[message.Property] = set;
                 }
 
-                await SendJsonAsync("property_changed", message.Property, set);
+                if (EchoSets)
+                {
+                    await SendJsonAsync("property_changed", message.Property, set);
+                }
+
                 break;
             case "iq_stream_enable":
                 IqOn = message.Value == "true";

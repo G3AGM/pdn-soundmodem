@@ -225,6 +225,27 @@ public sealed class SdrConnectIqSourceTests : IDisposable
     }
 
     [Fact]
+    public async Task A_Retune_Is_Followed_When_SDRconnect_Does_Not_Report_A_Set_Back_To_The_Client_That_Made_It()
+    {
+        using var host = new FakeSdrConnectHost(f => f.EchoSets = false);
+        (SdrConnectIqSource source, FakeSdrConnect fake) = await OpenAsync(host, Options() with { AnswerTimeout = TimeSpan.FromMilliseconds(500) });
+        await fake.Streaming.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        await fake.SendIqAsync(Ramp(100));
+        ReadPairs(source, 100);
+
+        source.Tune(14_075_000);
+        await fake.WaitForAsync(f => f.Value("device_center_frequency") == "14075000", "the retune");
+        await Task.Delay(2500, TestContext.Current.CancellationToken); // past the answer timeout and a watchdog tick
+        await fake.SendIqAsync(Ramp(100));
+        ReadPairs(source, 100);
+
+        source.CentreFrequencyHz.Should().Be(14_075_000, "the stream is where SDRconnect says the LO is once asked");
+        source.TargetCentreHz.Should().Be(14_075_000);
+        source.TuningGeneration.Should().Be(1);
+        _journal.Should().NotContain(l => l.Contains("did not take", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task A_New_Rate_From_SDRconnect_Is_Taken_With_The_Block_After_It()
     {
         using var host = new FakeSdrConnectHost();

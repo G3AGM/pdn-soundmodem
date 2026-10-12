@@ -260,7 +260,7 @@ internal sealed class SdrConnectClient : IDisposable
             _wantedCentreHz = centreHz;
         }
 
-        Fire(SetTracked(SdrConnectProtocol.Properties.CentreFrequency, SdrConnectProtocol.Number(centreHz)));
+        Fire(SendWantedAsync(SdrConnectProtocol.Properties.CentreFrequency));
     }
 
     /// <summary>Moves the VFO, and the LO first if <paramref name="centreHz"/> is given.</summary>
@@ -275,17 +275,17 @@ internal sealed class SdrConnectClient : IDisposable
             }
         }
 
-        Fire(TuneVfoAsync(vfoHz, centreHz));
+        Fire(TuneVfoAsync(centreHz is not null));
     }
 
-    private async Task TuneVfoAsync(double vfoHz, double? centreHz)
+    private async Task TuneVfoAsync(bool centreToo)
     {
-        if (centreHz is double centre)
+        if (centreToo)
         {
-            await SetTracked(SdrConnectProtocol.Properties.CentreFrequency, SdrConnectProtocol.Number(centre)).ConfigureAwait(false);
+            await SendWantedAsync(SdrConnectProtocol.Properties.CentreFrequency).ConfigureAwait(false);
         }
 
-        await SetTracked(SdrConnectProtocol.Properties.VfoFrequency, SdrConnectProtocol.Number(vfoHz)).ConfigureAwait(false);
+        await SendWantedAsync(SdrConnectProtocol.Properties.VfoFrequency).ConfigureAwait(false);
     }
 
     /// <summary>Closes the connection and stops reconnecting.</summary>
@@ -559,16 +559,11 @@ internal sealed class SdrConnectClient : IDisposable
         await SendAsync(SdrConnectProtocol.Enable(SdrConnectProtocol.Events.SpectrumEnable, false)).ConfigureAwait(false);
         if (_options.SampleRate is int rate)
         {
-            await SetTracked(SdrConnectProtocol.Properties.SampleRate, SdrConnectProtocol.Number(rate)).ConfigureAwait(false);
+            // Not held to: whatever rate SDRconnect then reports is the one taken.
+            await SendAsync(SdrConnectProtocol.Set(SdrConnectProtocol.Properties.SampleRate, SdrConnectProtocol.Number(rate))).ConfigureAwait(false);
         }
 
-        double centre;
-        lock (_stateGate)
-        {
-            centre = _wantedCentreHz;
-        }
-
-        await SetTracked(SdrConnectProtocol.Properties.CentreFrequency, SdrConnectProtocol.Number(centre)).ConfigureAwait(false);
+        await SendWantedAsync(SdrConnectProtocol.Properties.CentreFrequency).ConfigureAwait(false);
         if (_options.Stream == SdrConnectStream.Audio)
         {
             await SetUpAudioAsync(report).ConfigureAwait(false);
@@ -607,15 +602,13 @@ internal sealed class SdrConnectClient : IDisposable
     private async Task SetUpAudioAsync(IReadOnlyDictionary<string, string> report)
     {
         string demodulator;
-        double vfo;
         lock (_stateGate)
         {
             demodulator = _wantedDemodulator;
-            vfo = _wantedVfoHz!.Value;
         }
 
-        await SetTracked(SdrConnectProtocol.Properties.Demodulator, demodulator).ConfigureAwait(false);
-        await SetTracked(SdrConnectProtocol.Properties.VfoFrequency, SdrConnectProtocol.Number(vfo)).ConfigureAwait(false);
+        await SendWantedAsync(SdrConnectProtocol.Properties.Demodulator).ConfigureAwait(false);
+        await SendWantedAsync(SdrConnectProtocol.Properties.VfoFrequency).ConfigureAwait(false);
         if (_options.FilterBandwidthHz is double bandwidth)
         {
             if (Whole(report, SdrConnectProtocol.Properties.DemodMaxBandwidth) is int widest && bandwidth > widest)
@@ -921,7 +914,7 @@ internal sealed class SdrConnectClient : IDisposable
             _quietForeign++;
         }
 
-        Fire(SetTracked(property, wanted));
+        Fire(SendWantedAsync(property));
     }
 
     /// <summary>Called by the watchdog: a value asked for that never arrived is taken as what the
@@ -1008,17 +1001,6 @@ internal sealed class SdrConnectClient : IDisposable
 
         return SdrConnectProtocol.ParseNumber(value) is double a && SdrConnectProtocol.ParseNumber(wanted) is double b
             && Math.Abs(a - b) < 1;
-    }
-
-    /// <summary>Sends a setting and notes that SDRconnect's reports of it are on their way to it.</summary>
-    private Task SetTracked(string property, string value)
-    {
-        lock (_stateGate)
-        {
-            _awaiting[property] = _time.GetUtcNow() + _options.AnswerTimeout;
-        }
-
-        return SendAsync(SdrConnectProtocol.Set(property, value));
     }
 
     private void OnBinary(ReadOnlySpan<byte> part, bool end)
@@ -1240,6 +1222,55 @@ internal sealed class SdrConnectClient : IDisposable
         }
         catch (ObjectDisposedException)
         {
+        }
+    }
+
+    /// <summary>
+    /// Sends what this client wants <paramref name="property"/> to be, then asks for it back.
+    /// </summary>
+    /// <remarks>
+    /// <para>The value is read inside the send gate, so of two sends racing (a retune and a put-back,
+    /// or a retune and a reconnect's set-up) the one that goes last carries the latest value, and
+    /// SDRconnect ends where this client last asked.</para>
+    /// <para>The <c>get_property</c> after the set is there because the document does not say
+    /// whether SDRconnect reports a change back to the client that made it. Without a report the
+    /// stream would be taken to be where it was, and the setting, at the answer timeout, as not
+    /// taken; with the answer, the change is followed either way.</para>
+    /// </remarks>
+    private async Task SendWantedAsync(string property)
+    {
+        WebSocket? socket;
+        lock (_stateGate)
+        {
+            socket = _socket;
+        }
+
+        if (socket is null)
+        {
+            return; // between connections: the next set-up sends everything again
+        }
+
+        await _sendGate.WaitAsync(_closing.Token).ConfigureAwait(false);
+        try
+        {
+            string? value;
+            lock (_stateGate)
+            {
+                value = Wanted(property);
+                if (value is null)
+                {
+                    return;
+                }
+
+                _awaiting[property] = _time.GetUtcNow() + _options.AnswerTimeout;
+            }
+
+            await socket.SendAsync(SdrConnectProtocol.Set(property, value), WebSocketMessageType.Text, endOfMessage: true, _closing.Token).ConfigureAwait(false);
+            await socket.SendAsync(SdrConnectProtocol.Get(property), WebSocketMessageType.Text, endOfMessage: true, _closing.Token).ConfigureAwait(false);
+        }
+        finally
+        {
+            _sendGate.Release();
         }
     }
 
