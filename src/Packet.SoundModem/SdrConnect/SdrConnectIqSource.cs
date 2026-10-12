@@ -319,6 +319,17 @@ public sealed class SdrConnectIqSource : IIqSource, ISdrConnectSink, IDisposable
             _nextLost += _count / 2;
         }
 
+        // What the runs thrown away were to say before themselves: a gap not yet handed out is
+        // still a gap. (A new tuning needs no carrying: the caller is reporting one.)
+        for (int k = 0; k < _segmentCount; k++)
+        {
+            ref Segment segment = ref _segments[(_firstSegment + k) % MaxSegments];
+            if (!segment.Applied)
+            {
+                _nextLost += segment.LostBefore;
+            }
+        }
+
         _ring = new float[wanted];
         _head = 0;
         _tail = 0;

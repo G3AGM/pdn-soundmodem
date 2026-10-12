@@ -311,7 +311,38 @@ public sealed class SdrConnectIqSourceTests : IDisposable
 
         source.Client.Reconnects.Should().Be(2);
         source.SamplesLost.Should().BeGreaterThan(0)
-            .And.BeLessThanOrEqualTo((long)(seconds * 48_000), "the time away is counted once, not again for each connection");
+            .And.BeLessThanOrEqualTo(
+                (long)((seconds + 0.25) * 48_000),
+                "the time away is counted once, not again for each connection (which would add the second's 1 s wait again)");
+    }
+
+    [Fact]
+    public async Task A_Gap_Waiting_To_Be_Read_Is_Still_Counted_When_A_Faster_Rate_Empties_The_Buffer()
+    {
+        using var host = new FakeSdrConnectHost();
+        (SdrConnectIqSource source, FakeSdrConnect fake) = await OpenAsync(
+            host, Options() with { ReconnectDelay = TimeSpan.FromMilliseconds(500) });
+        await fake.Streaming.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        await fake.SendIqAsync(Ramp(100));
+        ReadPairs(source, 100);
+
+        fake.Drop();
+        FakeSdrConnect second = await host.NextAsync();
+        await second.Streaming.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        await second.SendIqAsync(Ramp(100)); // after the gap, and not read yet
+        await second.ChangeAsync("device_sample_rate", "96000");
+        await Task.Delay(100, TestContext.Current.CancellationToken);
+        await second.SendIqAsync(Ramp(100));
+        DateTime giveUp = DateTime.UtcNow.AddSeconds(10);
+        while (source.Client.FramesDelivered < 300 && DateTime.UtcNow < giveUp)
+        {
+            await Task.Delay(10, TestContext.Current.CancellationToken);
+        }
+
+        ReadPairs(source, 100);
+
+        source.SampleRate.Should().Be(96_000);
+        source.SamplesLost.Should().BeGreaterThan(48_000 / 2, "half a second away at 48 kS/s, as well as the 100 pairs thrown away");
     }
 
     [Fact]
