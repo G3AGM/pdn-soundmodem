@@ -287,6 +287,34 @@ public sealed class SdrConnectIqSourceTests : IDisposable
     }
 
     [Fact]
+    public async Task Time_Away_Is_Counted_Once_When_A_Connection_Between_Brought_Only_Another_Stream()
+    {
+        using var host = new FakeSdrConnectHost();
+        (SdrConnectIqSource source, FakeSdrConnect fake) = await OpenAsync(
+            host, Options() with { ReconnectDelay = TimeSpan.FromSeconds(1) });
+        await fake.Streaming.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        await fake.SendIqAsync(Ramp(100));
+        ReadPairs(source, 100);
+
+        var away = System.Diagnostics.Stopwatch.StartNew();
+        fake.Drop();
+        FakeSdrConnect second = await host.NextAsync();
+        await second.Streaming.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        await second.SendAudioAsync(Ramp(100)); // binary, but not the stream taken
+        await Task.Delay(100, TestContext.Current.CancellationToken);
+        second.Drop();
+        FakeSdrConnect third = await host.NextAsync();
+        await third.Streaming.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        await third.SendIqAsync(Ramp(100));
+        ReadPairs(source, 100);
+        double seconds = away.Elapsed.TotalSeconds;
+
+        source.Client.Reconnects.Should().Be(2);
+        source.SamplesLost.Should().BeGreaterThan(0)
+            .And.BeLessThanOrEqualTo((long)(seconds * 48_000), "the time away is counted once, not again for each connection");
+    }
+
+    [Fact]
     public async Task A_Connection_That_Goes_Quiet_Is_Dropped_And_Reconnected()
     {
         using var host = new FakeSdrConnectHost();

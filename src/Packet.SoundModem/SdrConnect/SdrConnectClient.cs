@@ -1005,19 +1005,24 @@ internal sealed class SdrConnectClient : IDisposable
 
     private void OnBinary(ReadOnlySpan<byte> part, bool end)
     {
-        if (_startPending)
-        {
-            Start();
-        }
-
         int offset = 0;
+        bool begins = false;
         while (_headerHave < SdrConnectProtocol.TypeBytes && offset < part.Length)
         {
             _header[_headerHave++] = part[offset++];
             if (_headerHave == SdrConnectProtocol.TypeBytes)
             {
                 _messageType = SdrConnectProtocol.BinaryType(_header);
+                begins = true;
             }
+        }
+
+        // The stream starts with the first message of the stream taken, at its type word so its
+        // frames line up: not with the other stream, or a spectrum message still in flight, which
+        // would start the clock on a connection that may never bring the stream at all.
+        if (begins && _startPending && _messageType == _wantedType)
+        {
+            Start();
         }
 
         if (_headerHave == SdrConnectProtocol.TypeBytes && _messageType == _wantedType && _streamOn)
@@ -1076,6 +1081,10 @@ internal sealed class SdrConnectClient : IDisposable
             // The time since the stream was last heard is lost; the settling after the set-up too.
             _pendingLost += Math.Max(1, (long)((now - _lossFrom).TotalSeconds * rate));
         }
+
+        // Counted up to here, so a connection that drops before its first frame does not have
+        // the same time counted again by the next.
+        _lossFrom = now;
 
         _discardFrames = Frames(_options.RetuneSettle, rate);
         _discardCounts = _everStarted;
