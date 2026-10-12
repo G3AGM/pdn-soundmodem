@@ -109,6 +109,7 @@ public class SdrConnectProtocolTests
     [InlineData("SDRCONNECT:192.168.1.20:5455", "192.168.1.20", 5455)]
     [InlineData("sdrconnect:[fd00::5]:5454", "fd00::5", 5454)]
     [InlineData("sdrconnect:[fd00::5]", "fd00::5", 5454)]
+    [InlineData("sdrconnect:shack-pc.local", "shack-pc.local", 5454)]
     public void A_Device_String_Names_A_Host_And_A_Port(string device, string host, int port)
     {
         SdrConnectDevice.IsSdrConnect(device).Should().BeTrue();
@@ -121,6 +122,9 @@ public class SdrConnectProtocolTests
     [InlineData("sdrconnect:host:70000", "*not a host and a TCP port*")]
     [InlineData("sdrconnect:fd00::5", "*IPv6 address in brackets*")]
     [InlineData("sdrconnect:ws://host/", "*not a host and a TCP port*")]
+    [InlineData("sdrconnect:shack pc", "*not a host and a TCP port*")]
+    [InlineData("sdrconnect:me@shack-pc", "*not a host and a TCP port*")]
+    [InlineData("sdrconnect:[not-an-address]:5454", "*not a host and a TCP port*")]
     public void A_Malformed_Device_String_Is_Refused_In_Words(string device, string message)
     {
         Action parse = () => SdrConnectDevice.Parse(device);

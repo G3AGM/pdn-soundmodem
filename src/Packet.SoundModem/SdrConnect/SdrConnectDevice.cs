@@ -67,6 +67,10 @@ public static class SdrConnectDevice
             }
 
             host = rest[1..close];
+            if (Uri.CheckHostName(host) != UriHostNameType.IPv6)
+            {
+                throw new InvalidDataException(Bad()); // brackets are for an IPv6 address only
+            }
             string after = rest[(close + 1)..];
             if (after.Length > 0)
             {
@@ -91,7 +95,9 @@ public static class SdrConnectDevice
             port = colon < 0 ? null : rest[(colon + 1)..];
         }
 
-        if (host.Length == 0)
+        // The host goes into a ws:// URI, which throws at the connect for a name it cannot parse
+        // (a space, a '@' taken as user information): refused here, in words, instead.
+        if (host.Length == 0 || Uri.CheckHostName(host) == UriHostNameType.Unknown)
         {
             throw new InvalidDataException(Bad());
         }
