@@ -18,7 +18,18 @@ public sealed class SdrConnectAllocationCollection;
 public sealed class SdrConnectAllocationTests
 {
     [Fact]
-    public async Task A_Steady_Iq_Stream_Allocates_Nothing_Per_Message()
+    public Task A_Steady_Iq_Stream_Allocates_Nothing_Per_Message() => MeasureAsync(push: null);
+
+    /// <summary>
+    /// SDRconnect may push measurements it keeps changing (signal_power, signal_snr) as often as it
+    /// likes; the document does not say how often. Those the station does not use cost nothing.
+    /// </summary>
+    [Fact]
+    public Task Pushes_Of_Properties_The_Station_Does_Not_Use_Allocate_Nothing() =>
+        MeasureAsync(push: System.Text.Encoding.UTF8.GetBytes(
+            "{\"event_type\":\"property_changed\",\"property\":\"signal_power\",\"device\":\"primary\",\"value\":\"-71.5\"}"));
+
+    private static async Task MeasureAsync(byte[]? push)
     {
         using var host = new FakeSdrConnectHost();
         using var source = new SdrConnectIqSource(FakeSdrConnectHost.Endpoint, new SdrConnectOptions
@@ -66,6 +77,11 @@ public sealed class SdrConnectAllocationTests
             {
                 long target = Interlocked.Read(ref read) + (2 * 4096);
                 long mine = GC.GetAllocatedBytesForCurrentThread();
+                if (push is not null)
+                {
+                    fake.SendRawTextAsync(push).GetAwaiter().GetResult();
+                }
+
                 fake.SendRawAsync(message).GetAwaiter().GetResult();
                 sending += GC.GetAllocatedBytesForCurrentThread() - mine;
                 while (Interlocked.Read(ref read) < target)

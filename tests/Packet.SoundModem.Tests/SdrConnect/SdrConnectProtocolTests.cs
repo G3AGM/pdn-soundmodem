@@ -58,6 +58,20 @@ public class SdrConnectProtocolTests
         SdrConnectProtocol.TryParse(Encoding.UTF8.GetBytes(json), out _).Should().BeFalse();
     }
 
+    [Theory]
+    [InlineData("{\"event_type\":\"property_changed\",\"property\":\"device_center_frequency\",\"value\":\"7000000\"}", true)]
+    [InlineData("{\"property\":\"demodulator\",\"value\":\"USB\",\"event_type\":\"property_changed\"}", true)]
+    [InlineData("{\"event_type\":\"get_property_response\",\"property\":\"lna_state_max\",\"value\":\"9\"}", true)]
+    [InlineData("{\"event_type\":\"property_changed\",\"property\":\"signal_power\",\"value\":\"-71.5\"}", false)]
+    [InlineData("{\"event_type\":\"set_property\",\"property\":\"device_center_frequency\",\"value\":\"7000000\"}", false)]
+    [InlineData("not json", false)]
+    public void Only_Answers_And_Pushes_About_Followed_Properties_Are_Read(string json, bool read)
+    {
+        byte[][] followed = ["device_center_frequency"u8.ToArray(), "demodulator"u8.ToArray()];
+
+        SdrConnectProtocol.IsFollowed(System.Text.Encoding.UTF8.GetBytes(json), followed).Should().Be(read);
+    }
+
     [Fact]
     public void A_Secondary_Device_Message_Is_Not_The_Primary()
     {

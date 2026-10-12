@@ -62,6 +62,20 @@ internal sealed class SdrConnectClient : IDisposable
         SdrConnectProtocol.Properties.AudioVolumePercent,
     ];
 
+    /// <summary>The pushes acted on (see <see cref="OnMessage"/>); every other push is passed over
+    /// unread.</summary>
+    private static readonly byte[][] Followed =
+    [
+        "device_center_frequency"u8.ToArray(),
+        "device_sample_rate"u8.ToArray(),
+        "device_vfo_frequency"u8.ToArray(),
+        "demodulator"u8.ToArray(),
+    ];
+
+    /// <summary>Longer than any message of the API: one this long is thrown away unread rather
+    /// than buffered without end.</summary>
+    private const int MaxTextBytes = 65_536;
+
     private readonly SdrConnectEndpoint _endpoint;
     private readonly SdrConnectOptions _options;
     private readonly Func<CancellationToken, Task<WebSocket>> _connect;
@@ -97,6 +111,7 @@ internal sealed class SdrConnectClient : IDisposable
     private readonly byte[] _buffer;
     private byte[] _text = new byte[4096];
     private int _textLength;
+    private bool _textTooLong;
     private readonly byte[] _header = new byte[SdrConnectProtocol.TypeBytes];
     private int _headerHave;
     private ushort _messageType;
@@ -445,6 +460,7 @@ internal sealed class SdrConnectClient : IDisposable
         _headerHave = 0;
         _carryLength = 0;
         _textLength = 0;
+        _textTooLong = false;
 
         Task<string> receiving = ReceiveLoopAsync(socket);
         string? refusal;
@@ -753,21 +769,30 @@ internal sealed class SdrConnectClient : IDisposable
 
     private void OnText(ReadOnlySpan<byte> part, bool end)
     {
-        if (_textLength + part.Length > _text.Length)
+        _textTooLong |= _textLength + part.Length > MaxTextBytes;
+        if (!_textTooLong)
         {
-            Array.Resize(ref _text, Math.Max(_text.Length * 2, _textLength + part.Length));
+            if (_textLength + part.Length > _text.Length)
+            {
+                Array.Resize(ref _text, Math.Min(Math.Max(_text.Length * 2, _textLength + part.Length), MaxTextBytes));
+            }
+
+            part.CopyTo(_text.AsSpan(_textLength));
+            _textLength += part.Length;
         }
 
-        part.CopyTo(_text.AsSpan(_textLength));
-        _textLength += part.Length;
         if (!end)
         {
             return;
         }
 
         int length = _textLength;
+        bool tooLong = _textTooLong;
         _textLength = 0;
-        if (SdrConnectProtocol.TryParse(_text.AsSpan(0, length), out SdrConnectMessage message))
+        _textTooLong = false;
+        ReadOnlySpan<byte> text = _text.AsSpan(0, length);
+        if (!tooLong && SdrConnectProtocol.IsFollowed(text, Followed)
+            && SdrConnectProtocol.TryParse(text, out SdrConnectMessage message))
         {
             OnMessage(message);
         }

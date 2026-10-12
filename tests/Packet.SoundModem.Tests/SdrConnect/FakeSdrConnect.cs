@@ -204,6 +204,20 @@ internal sealed class FakeSdrConnect
         }
     }
 
+    /// <summary>A whole text message as it is, for the same test.</summary>
+    public async Task SendRawTextAsync(byte[] message)
+    {
+        await _send.WaitAsync();
+        try
+        {
+            await _socket.SendAsync(message.AsMemory(), WebSocketMessageType.Text, true, CancellationToken.None);
+        }
+        finally
+        {
+            _send.Release();
+        }
+    }
+
     /// <summary>Ends the connection abruptly, as a crash or a pulled cable would.</summary>
     public void Drop() => _socket.Abort();
 

@@ -276,6 +276,64 @@ public static class SdrConnectProtocol
     }
 
     /// <summary>
+    /// Whether a text message is one a client reads: any <c>get_property_response</c> (they come
+    /// only when asked for), and a <c>property_changed</c> about one of <paramref name="followed"/>
+    /// (UTF-8 property names). Reads without allocating, so the pushes it passes over, of whatever
+    /// SDRconnect keeps changing and however often it says so, cost nothing.
+    /// </summary>
+    public static bool IsFollowed(ReadOnlySpan<byte> utf8, byte[][] followed)
+    {
+        ArgumentNullException.ThrowIfNull(followed);
+        bool response = false;
+        bool push = false;
+        bool about = false;
+        try
+        {
+            var reader = new Utf8JsonReader(utf8);
+            if (!reader.Read() || reader.TokenType != JsonTokenType.StartObject)
+            {
+                return false;
+            }
+
+            while (reader.Read() && reader.TokenType == JsonTokenType.PropertyName)
+            {
+                bool isEvent = reader.ValueTextEquals("event_type"u8);
+                bool isProperty = !isEvent && reader.ValueTextEquals("property"u8);
+                if (!reader.Read())
+                {
+                    return false;
+                }
+
+                if (reader.TokenType == JsonTokenType.String)
+                {
+                    if (isEvent)
+                    {
+                        response = reader.ValueTextEquals(Events.GetPropertyResponse);
+                        push = reader.ValueTextEquals(Events.PropertyChanged);
+                    }
+                    else if (isProperty)
+                    {
+                        foreach (byte[] name in followed)
+                        {
+                            about |= reader.ValueTextEquals(name);
+                        }
+                    }
+                }
+                else if (reader.TokenType is JsonTokenType.StartObject or JsonTokenType.StartArray)
+                {
+                    reader.Skip();
+                }
+            }
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+
+        return response || (push && about);
+    }
+
+    /// <summary>
     /// Text from SDRconnect (a device name, an antenna) or about it (an exception's message) made
     /// safe to print on a station's console: anything outside printable ASCII becomes '?'.
     /// </summary>
