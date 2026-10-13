@@ -33,20 +33,30 @@ public sealed record RtlTcpSourceOptions
     public bool RtlAgc { get; init; }
 
     /// <summary>
-    /// Added to <see cref="CentreFrequencyHz"/> before it is sent to the dongle, Hz: for a
-    /// dongle behind a converter whose own local oscillator puts the signal somewhere else than
-    /// the frequency this source's samples are taken to represent - an IF tap off another
-    /// radio, say. 0 (the default) tunes the dongle to the centre frequency itself. Controlled
-    /// only; everything above this source still reads <see cref="CentreFrequencyHz"/>, not the
-    /// dongle's own tuned frequency.
+    /// The converter's own real local oscillator frequency, Hz: for a dongle behind a converter
+    /// whose own LO puts the signal somewhere else than the frequency this source's samples are
+    /// taken to represent - an IF tap off another radio, say. 0 (the default) tunes the dongle
+    /// to the centre frequency itself. Controlled only; everything above this source still reads
+    /// <see cref="CentreFrequencyHz"/>, not the dongle's own tuned frequency. Combined with
+    /// <see cref="IqSwap"/>: see there for how the two meet.
     /// </summary>
     public double LfoOffsetHz { get; init; }
 
     /// <summary>
     /// Swap the I and Q samples the server sends, after every other setting here: for a
-    /// converter (or an inverted IF) whose spectrum comes out mirrored. False (the default)
-    /// takes them as the server sends them.
+    /// converter whose own mixing reverses frequency sense (so the spectrum comes out
+    /// mirrored). False (the default) takes them as the server sends them.
     /// </summary>
+    /// <remarks>
+    /// The swap is a reflection about whatever frequency the dongle is physically tuned to, so a
+    /// converter's real local oscillator and the station's centre frequency do not simply add
+    /// once a reflection is in the path: non-inverting, the dongle is tuned to
+    /// <c>centre + lfoOffsetHz</c>, same as a dongle with no converter in front of it but moved
+    /// by a fixed amount; inverting, it is tuned to <c>lfoOffsetHz - centre</c>, so that the
+    /// swap's reflection lands the dial back where the station's own DC-clearance placement
+    /// (<see cref="IqTuning.DcClearOffsetHz"/>) put it before the converter. <see cref="LfoOffsetHz"/>
+    /// is the converter's real LO either way, not a value picked to make one dial work.
+    /// </remarks>
     public bool IqSwap { get; init; }
 
     /// <summary>How long a connect, and the header after it, may take.</summary>
@@ -116,16 +126,18 @@ public sealed record RtlTcpSourceOptions
 /// does; the time it was gone is added to <see cref="SamplesLost"/> on the first block after, so
 /// the front end marks a gap rather than splicing. <see cref="Connected"/> says which, for the
 /// station's starvation watch.</para>
-/// <para><b>Controlled.</b> Opening sends the rate, the centre (plus
-/// <see cref="RtlTcpSourceOptions.LfoOffsetHz"/>, for a dongle behind a converter whose own
-/// local oscillator is not where the signal is heard), the frequency correction, the gain
-/// mode and gain, and the AGC mode, and sends them again on every reconnect, because the server
-/// may have restarted with its own defaults. <see cref="Tune"/> retunes; since the protocol does
-/// not say where in the stream a command took effect, what was already in flight and
-/// <see cref="RtlTcpSourceOptions.RetuneSettle"/> after it are thrown away and counted as lost,
-/// and the next block is the first at the new tuning (<see cref="TuningGeneration"/> moves).
-/// <see cref="RtlTcpSourceOptions.IqSwap"/> swaps every sample's I and Q after conversion, for a
-/// spectrum that otherwise comes out mirrored; it needs no retune and takes effect at once.</para>
+/// <para><b>Controlled.</b> Opening sends the rate, the centre (combined with
+/// <see cref="RtlTcpSourceOptions.LfoOffsetHz"/> for a dongle behind a converter whose own local
+/// oscillator is not where the signal is heard - see <see cref="TunerHz"/> and
+/// <see cref="RtlTcpSourceOptions.IqSwap"/> for how the two combine), the frequency correction,
+/// the gain mode and gain, and the AGC mode, and sends them again on every reconnect, because
+/// the server may have restarted with its own defaults. <see cref="Tune"/> retunes; since the
+/// protocol does not say where in the stream a command took effect, what was already in flight
+/// and <see cref="RtlTcpSourceOptions.RetuneSettle"/> after it are thrown away and counted as
+/// lost, and the next block is the first at the new tuning (<see cref="TuningGeneration"/>
+/// moves). <see cref="RtlTcpSourceOptions.IqSwap"/> also swaps every sample's I and Q after
+/// conversion, for a spectrum that otherwise comes out mirrored; it needs no retune and takes
+/// effect at once.</para>
 /// <para><b>Read-only.</b> Nothing is ever sent. The centre and rate are taken from settings. A
 /// profile switch at a different rate is caught by <see cref="IqRateWatch"/>: the stream is
 /// dropped (counted as lost) while it is wrong, <see cref="SessionLive"/> goes false so the
@@ -204,7 +216,7 @@ public sealed class RtlTcpIqSource : IIqSource, IDisposable
 
         if (!options.ReadOnly)
         {
-            CheckControllable(options.CentreFrequencyHz, options.LfoOffsetHz, options.SampleRate);
+            CheckControllable(options.CentreFrequencyHz, options.LfoOffsetHz, options.IqSwap, options.SampleRate);
         }
 
         _endpoint = endpoint;
@@ -377,7 +389,7 @@ public sealed class RtlTcpIqSource : IIqSource, IDisposable
         }
 
         int rate = sampleRate ?? TargetRate();
-        CheckControllable(centreHz, _options.LfoOffsetHz, rate);
+        CheckControllable(centreHz, _options.LfoOffsetHz, _options.IqSwap, rate);
         lock (_sendGate)
         {
             bool rateMoved = rate != _wantedRate;
@@ -395,7 +407,7 @@ public sealed class RtlTcpIqSource : IIqSource, IDisposable
                         length += RtlTcpProtocol.CommandLength;
                     }
 
-                    RtlTcpProtocol.Encode(_commands.AsSpan(length), RtlTcpCommand.SetFrequency, (uint)Math.Round(centreHz + _options.LfoOffsetHz));
+                    RtlTcpProtocol.Encode(_commands.AsSpan(length), RtlTcpCommand.SetFrequency, (uint)Math.Round(TunerHz(centreHz, _options.LfoOffsetHz, _options.IqSwap)));
                     length += RtlTcpProtocol.CommandLength;
                     socket.Send(_commands.AsSpan(0, length));
                     inFlight = socket.Available;
@@ -938,7 +950,7 @@ public sealed class RtlTcpIqSource : IIqSource, IDisposable
             }
 
             Add(c, RtlTcpCommand.SetSampleRate, (uint)_wantedRate);
-            Add(c, RtlTcpCommand.SetFrequency, (uint)Math.Round(_wantedCentreHz + _options.LfoOffsetHz));
+            Add(c, RtlTcpCommand.SetFrequency, (uint)Math.Round(TunerHz(_wantedCentreHz, _options.LfoOffsetHz, _options.IqSwap)));
             Add(c, RtlTcpCommand.SetFrequencyCorrection, unchecked((uint)_options.FrequencyCorrectionPpm));
             Add(c, RtlTcpCommand.SetGainMode, _options.TunerGainDb is null ? 0u : 1u);
             if (_options.TunerGainDb is double gain)
@@ -951,14 +963,21 @@ public sealed class RtlTcpIqSource : IIqSource, IDisposable
         }
     }
 
-    private static void CheckControllable(double centreHz, double lfoOffsetHz, int sampleRate)
+    /// <summary>
+    /// What the dongle is actually told to tune to, Hz: see <see cref="RtlTcpSourceOptions.IqSwap"/>
+    /// for why swapped and unswapped take the LFO offset differently.
+    /// </summary>
+    private static double TunerHz(double centreHz, double lfoOffsetHz, bool iqSwap) =>
+        iqSwap ? lfoOffsetHz - centreHz : centreHz + lfoOffsetHz;
+
+    private static void CheckControllable(double centreHz, double lfoOffsetHz, bool iqSwap, int sampleRate)
     {
         if (!double.IsFinite(lfoOffsetHz))
         {
             throw new ArgumentOutOfRangeException(nameof(lfoOffsetHz), lfoOffsetHz, "the LFO offset must be a frequency");
         }
 
-        double tunerHz = centreHz + lfoOffsetHz;
+        double tunerHz = TunerHz(centreHz, lfoOffsetHz, iqSwap);
         if (!double.IsFinite(tunerHz) || tunerHz < 1 || tunerHz > uint.MaxValue)
         {
             throw new ArgumentOutOfRangeException(nameof(centreHz), centreHz,

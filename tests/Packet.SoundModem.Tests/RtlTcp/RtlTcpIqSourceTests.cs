@@ -92,6 +92,52 @@ public sealed class RtlTcpIqSourceTests
     }
 
     [Fact]
+    public async Task With_Iq_Swap_The_Dongle_Is_Tuned_To_The_Lfo_Offset_Less_The_Centre()
+    {
+        using var server = new FakeRtlTcpServer();
+        using var source = new RtlTcpIqSource(server.Endpoint, Controlled(1_000_000) with { LfoOffsetHz = 50_000_000, IqSwap = true });
+
+        await source.OpenAsync(CancellationToken.None);
+        server.WaitForCommands(2);
+
+        server.Commands.Should().Contain(c => c.Command == RtlTcpCommand.SetFrequency && c.Parameter == 49_000_000u);
+    }
+
+    /// <summary>
+    /// Tom's review of #703: with <c>iqSwap</c> on, a tone really sitting where the station's
+    /// own DC-clearance places the dial (<see cref="IqTuning.DcClearOffsetHz"/> below the dongle's
+    /// own tuned frequency, before the swap) has to come out, after the swap, where everything
+    /// above this source expects the dial: the same distance above <see cref="RtlTcpIqSource.CentreFrequencyHz"/>,
+    /// not mirrored to the far side of it. This is the end-to-end check that would have caught a
+    /// fixed offset with the wrong sign (the bug #703 was reviewed for, worked out from the code
+    /// rather than run): it fails at this offset specifically because a sign error moves the dial
+    /// to twice the gap away, on the wrong side, not merely a little off.
+    /// </summary>
+    [Fact]
+    public async Task With_Iq_Swap_A_Tone_Below_The_Tuned_Frequency_Lands_Above_The_Centre()
+    {
+        const double LfoOffsetHz = 50_000_000;
+        const double CentreHz = 1_000_000;
+        const double DcClearHz = 25_000;
+        double tunerHz = LfoOffsetHz - CentreHz; // what Tune sends with iqSwap on
+
+        using var server = new FakeRtlTcpServer();
+        using var source = new RtlTcpIqSource(server.Endpoint, Controlled(CentreHz) with { LfoOffsetHz = LfoOffsetHz, IqSwap = true });
+        await source.OpenAsync(CancellationToken.None);
+        server.WaitForCommands(2);
+        server.Commands.Should().Contain(c => c.Command == RtlTcpCommand.SetFrequency && c.Parameter == (uint)tunerHz);
+
+        // The dongle really is at tunerHz; a tone DcClearHz below it is what a converter at
+        // LfoOffsetHz puts there when the real signal sits at CentreHz + DcClearHz - exactly
+        // where this station's own DC-clearance places the dial before any swap.
+        server.Send(ComplexToneBytes(Rate, offsetHz: -DcClearHz, seconds: 0.05));
+        float[] iq = ReadAtLeast(source, (int)(Rate * 0.03) * 2);
+
+        ComplexMagnitudeAt(iq, DcClearHz, Rate).Should().BeGreaterThan(0.3f, "the dial lands above the centre, the same side the station's own DC clearance always puts it");
+        ComplexMagnitudeAt(iq, -DcClearHz, Rate).Should().BeLessThan(0.05f, "not mirrored to below the centre");
+    }
+
+    [Fact]
     public async Task Iq_Swap_Exchanges_I_And_Q_After_Conversion()
     {
         using var server = new FakeRtlTcpServer(header: null) { Header = null };
@@ -567,5 +613,43 @@ public sealed class RtlTcpIqSourceTests
         }
 
         return [.. result];
+    }
+
+    /// <summary>A complex tone at <paramref name="offsetHz"/> relative to DC, as dongle bytes.</summary>
+    private static byte[] ComplexToneBytes(int rate, double offsetHz, double seconds)
+    {
+        int samples = (int)(rate * seconds);
+        var bytes = new byte[samples * 2];
+        double w = 2.0 * Math.PI * offsetHz / rate;
+        for (int k = 0; k < samples; k++)
+        {
+            bytes[2 * k] = ToByte(Math.Cos(w * k));
+            bytes[(2 * k) + 1] = ToByte(Math.Sin(w * k));
+        }
+
+        return bytes;
+
+        static byte ToByte(double sample) => (byte)Math.Clamp(Math.Round(127.5 + (127.5 * sample)), 0, 255);
+    }
+
+    /// <summary>The magnitude of whatever is at <paramref name="freqHz"/> relative to DC in
+    /// <paramref name="interleaved"/>, a complex (I,Q) correlation rather than a real Goertzel: a
+    /// complex signal's energy at +f and -f are independent, which is exactly what distinguishes
+    /// a tone landing above the centre from one mirrored below it.</summary>
+    private static float ComplexMagnitudeAt(ReadOnlySpan<float> interleaved, double freqHz, double rate)
+    {
+        int samples = interleaved.Length / 2;
+        double w = 2.0 * Math.PI * freqHz / rate;
+        double sumRe = 0, sumIm = 0;
+        for (int k = 0; k < samples; k++)
+        {
+            double i = interleaved[2 * k], q = interleaved[(2 * k) + 1];
+            double c = Math.Cos(w * k), s = Math.Sin(w * k);
+            // (i + jq) * exp(-j*w*k)
+            sumRe += (i * c) + (q * s);
+            sumIm += (q * c) - (i * s);
+        }
+
+        return (float)(Math.Sqrt((sumRe * sumRe) + (sumIm * sumIm)) / samples);
     }
 }
