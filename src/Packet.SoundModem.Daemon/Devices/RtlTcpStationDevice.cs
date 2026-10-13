@@ -143,6 +143,13 @@ internal sealed class RtlTcpStationDevice(
             {
                 return "\"rtltcp\".\"lfoOffsetHz\" has to be a frequency";
             }
+
+            if (config.IqSwap == true && config.LfoOffsetHz is null or 0)
+            {
+                return "\"rtltcp\".\"iqSwap\" is for a converter that inverts the spectrum, and needs "
+                    + "\"lfoOffsetHz\", that converter's local oscillator: the dongle is tuned to the "
+                    + "oscillator less the centre.";
+            }
         }
 
         if (config.NoDataSeconds is double noData && (!double.IsFinite(noData) || noData <= 0))
@@ -238,10 +245,10 @@ internal sealed class RtlTcpStationDevice(
         bool iqSwap = config?.IqSwap ?? false;
         string tuning = readOnly
             ? $"read-only, its profile taken as {RfPlan.Mhz(input.Source.CentreFrequencyHz)} at {rate} S/s"
-            : $"dongle at {RfPlan.Mhz(input.Source.CentreFrequencyHz + lfoOffsetHz)}, {rate} S/s, "
+            : $"dongle at {RfPlan.Mhz(input.Source.TunerFrequencyHz)}, {rate} S/s, "
                 + (config?.GainDb is double gain ? $"gain {gain:F1} dB" : "tuner AGC")
-                + (lfoOffsetHz == 0 ? "" : $", {RfPlan.Mhz(input.Source.CentreFrequencyHz)} once the {RfPlan.Mhz(lfoOffsetHz)} LFO offset is taken out")
-                + (iqSwap ? ", I/Q swapped" : "");
+                + (lfoOffsetHz == 0 ? "" : $", hearing {RfPlan.Mhz(input.Source.CentreFrequencyHz)} through a converter at {RfPlan.Mhz(lfoOffsetHz)}")
+                + (iqSwap ? ", spectrum inverted, I/Q swapped" : "");
         string filter = demodulation == IqDemodulation.Fm
             ? $"FM, IF {channel.FmIfBandwidthHz:F0} Hz"
             : $"{demodulation.ToString().ToUpperInvariant()} {channel.SsbLowHz:F0}-{channel.SsbHighHz:F0} Hz";

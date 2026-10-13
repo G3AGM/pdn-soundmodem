@@ -249,6 +249,11 @@ public sealed class RtlTcpIqSource : IIqSource, IDisposable
     /// <inheritdoc />
     public double CentreFrequencyHz { get; private set; }
 
+    /// <summary>What the dongle itself is tuned to for <see cref="CentreFrequencyHz"/>, Hz: the
+    /// centre once <see cref="RtlTcpSourceOptions.LfoOffsetHz"/> and
+    /// <see cref="RtlTcpSourceOptions.IqSwap"/> are applied, for the journal.</summary>
+    public double TunerFrequencyHz => TunerHz(CentreFrequencyHz, _options.LfoOffsetHz, _options.IqSwap);
+
     /// <inheritdoc />
     public long TuningGeneration => Interlocked.Read(ref _generation);
 

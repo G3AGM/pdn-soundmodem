@@ -60,6 +60,8 @@ public class RtlTcpDeviceKindTests
         { new RtlTcpConfig { SampleRate = 2_048_000, GainDb = 29.7, Ppm = -3, RtlAgc = false }, null },
         { new RtlTcpConfig { LfoOffsetHz = 66_021_528, IqSwap = true }, null },
         { new RtlTcpConfig { LfoOffsetHz = double.PositiveInfinity }, "*\"lfoOffsetHz\" has to be a frequency*" },
+        { new RtlTcpConfig { IqSwap = true }, "*\"iqSwap\" is for a converter*" },
+        { new RtlTcpConfig { IqSwap = false }, null },
         { new RtlTcpConfig { ReadOnly = true, CentreFrequency = 144_900_000, SampleRate = 2_400_000, LfoOffsetHz = 66_021_528 }, "*\"lfoOffsetHz\" and \"iqSwap\"*" },
         { new RtlTcpConfig { ReadOnly = true, CentreFrequency = 144_900_000, SampleRate = 2_400_000, IqSwap = true }, "*\"lfoOffsetHz\" and \"iqSwap\"*" },
         { new RtlTcpConfig { ReadOnly = true, CentreFrequency = 144_900_000, SampleRate = 2_400_000 }, null },

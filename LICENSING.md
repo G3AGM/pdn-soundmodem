@@ -39,6 +39,8 @@ Dire Wolf and MMDVM-TNC are GPL-2.0-or-later and are used here under their "or l
 
 Tom Wardill contributed the `pdn-soundmodem@` systemd template unit on 2026-09-14 (PR #477, commits `159bf32` and `60a7175`), originally under GPL-3.0-or-later. Tom Wardill agreed on 2026-10-05, relayed by Tom M0LTE, to relicense that contribution under AGPL-3.0-or-later, so those files (`StateDirectory.cs`, its test, `packaging/pdn-soundmodem@.service` and his lines in the packaging scripts, daemon config code, release workflow and docs) are AGPL-3.0-or-later like the rest of the repository.
 
+Andrew Amos (G3AGM) contributed the `rtltcp` `lfoOffsetHz` and `iqSwap` settings on 2026-10-13 (PR #703), and agreed in that PR the same day to their being licensed under AGPL-3.0-or-later, so his lines in `RtlTcpIqSource.cs`, `RtlTcpConfig.cs`, `RtlTcpStationDevice.cs`, their tests and `docs/reference/config.md` are AGPL-3.0-or-later like the rest of the repository.
+
 Everyone else who has committed to this repository is Tom (as Tom Fanning or M0LTE) or Claude working for him.
 
 ## Considered and left AGPL
