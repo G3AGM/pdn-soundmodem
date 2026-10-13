@@ -107,6 +107,13 @@ internal sealed class RtlTcpStationDevice(
                 return "\"rtltcp\".\"gainDb\", \"ppm\" and \"rtlAgc\" are settings sent to a server, and "
                     + "\"readOnly\" sends nothing; set them on the server, or remove them.";
             }
+
+            if (config.LfoOffsetHz is not null || config.IqSwap is not null)
+            {
+                return "\"rtltcp\".\"lfoOffsetHz\" and \"iqSwap\" describe a dongle this station tunes "
+                    + "itself, and a \"readOnly\" server's profile is already fixed by its own operator; "
+                    + "remove them.";
+            }
         }
         else
         {
@@ -130,6 +137,11 @@ internal sealed class RtlTcpStationDevice(
             if (config.Ppm is int ppm && Math.Abs(ppm) > 1000)
             {
                 return $"\"rtltcp\".\"ppm\" ({ppm}) is not a crystal error; it has to be within 1000 either way";
+            }
+
+            if (config.LfoOffsetHz is double lfo && !double.IsFinite(lfo))
+            {
+                return "\"rtltcp\".\"lfoOffsetHz\" has to be a frequency";
             }
         }
 
@@ -194,6 +206,8 @@ internal sealed class RtlTcpStationDevice(
             TunerGainDb = config?.GainDb,
             FrequencyCorrectionPpm = config?.Ppm ?? 0,
             RtlAgc = config?.RtlAgc ?? false,
+            LfoOffsetHz = config?.LfoOffsetHz ?? 0,
+            IqSwap = config?.IqSwap ?? false,
             NoDataTimeout = TimeSpan.FromSeconds(config?.NoDataSeconds ?? 5),
             Journal = journal.ErrorSink,
         };
@@ -220,10 +234,14 @@ internal sealed class RtlTcpStationDevice(
             return DeviceOpening.Refused(1);
         }
 
+        double lfoOffsetHz = config?.LfoOffsetHz ?? 0;
+        bool iqSwap = config?.IqSwap ?? false;
         string tuning = readOnly
             ? $"read-only, its profile taken as {RfPlan.Mhz(input.Source.CentreFrequencyHz)} at {rate} S/s"
-            : $"dongle at {RfPlan.Mhz(input.Source.CentreFrequencyHz)}, {rate} S/s, "
-                + (config?.GainDb is double gain ? $"gain {gain:F1} dB" : "tuner AGC");
+            : $"dongle at {RfPlan.Mhz(input.Source.CentreFrequencyHz + lfoOffsetHz)}, {rate} S/s, "
+                + (config?.GainDb is double gain ? $"gain {gain:F1} dB" : "tuner AGC")
+                + (lfoOffsetHz == 0 ? "" : $", {RfPlan.Mhz(input.Source.CentreFrequencyHz)} once the {RfPlan.Mhz(lfoOffsetHz)} LFO offset is taken out")
+                + (iqSwap ? ", I/Q swapped" : "");
         string filter = demodulation == IqDemodulation.Fm
             ? $"FM, IF {channel.FmIfBandwidthHz:F0} Hz"
             : $"{demodulation.ToString().ToUpperInvariant()} {channel.SsbLowHz:F0}-{channel.SsbHighHz:F0} Hz";

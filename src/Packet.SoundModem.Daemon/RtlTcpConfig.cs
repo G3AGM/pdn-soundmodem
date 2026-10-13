@@ -40,6 +40,22 @@ public sealed class RtlTcpConfig
     /// <summary>Turn on the RTL2832's own digital AGC. Default false. Controlled only.</summary>
     public bool? RtlAgc { get; set; }
 
+    /// <summary>
+    /// Added to the centre frequency before it is sent to the dongle, Hz: for a dongle behind a
+    /// converter whose own local oscillator puts the signal somewhere else than where this
+    /// station hears it - an IF tap off another radio's own IF, say, rather than the antenna
+    /// directly. Default 0, which tunes the dongle to the dial itself. Controlled only; nothing
+    /// else here changes, since the station still places the band plan's dial in the IQ exactly
+    /// as it always did.
+    /// </summary>
+    public double? LfoOffsetHz { get; set; }
+
+    /// <summary>
+    /// Swap the I and Q samples the server sends: for a converter (or an inverted IF) whose
+    /// spectrum comes out mirrored. Default false. Controlled only.
+    /// </summary>
+    public bool? IqSwap { get; set; }
+
     /// <summary>Seconds a connected server may send nothing before it is dropped and reconnected.
     /// Default 5.</summary>
     public double? NoDataSeconds { get; set; }

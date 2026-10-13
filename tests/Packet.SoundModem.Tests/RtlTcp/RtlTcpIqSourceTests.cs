@@ -57,6 +57,58 @@ public sealed class RtlTcpIqSourceTests
     }
 
     [Fact]
+    public async Task A_Lfo_Offset_Is_Added_To_The_Centre_Before_It_Is_Sent()
+    {
+        using var server = new FakeRtlTcpServer();
+        using var source = new RtlTcpIqSource(server.Endpoint, Controlled(73_061_628 - 66_021_528) with { LfoOffsetHz = 66_021_528 });
+
+        await source.OpenAsync(CancellationToken.None);
+        server.WaitForCommands(2);
+
+        server.Commands.Should().Contain(c => c.Command == RtlTcpCommand.SetFrequency && c.Parameter == 73_061_628u);
+        source.CentreFrequencyHz.Should().Be(73_061_628 - 66_021_528, "everything above this source still reads the logical centre, not the dongle's own tuned frequency");
+    }
+
+    [Fact]
+    public async Task A_Lfo_Offset_Is_Added_Again_On_A_Retune()
+    {
+        using var server = new FakeRtlTcpServer();
+        using var source = new RtlTcpIqSource(server.Endpoint, Controlled() with { LfoOffsetHz = 66_021_528 });
+        await source.OpenAsync(CancellationToken.None);
+        server.WaitForCommands(6);
+
+        source.Tune(144_900_000);
+        server.WaitForCommands(7);
+
+        server.Commands.Last().Should().Be((1, RtlTcpCommand.SetFrequency, 144_900_000u + 66_021_528u));
+    }
+
+    [Fact]
+    public void A_Centre_That_Overflows_Once_The_Lfo_Offset_Is_Added_Is_Refused()
+    {
+        Action open = () => new RtlTcpIqSource(new RtlTcpEndpoint("127.0.0.1", 1), Controlled(4_000_000_000) with { LfoOffsetHz = 400_000_000 });
+
+        open.Should().Throw<ArgumentOutOfRangeException>().WithMessage("*LFO offset*");
+    }
+
+    [Fact]
+    public async Task Iq_Swap_Exchanges_I_And_Q_After_Conversion()
+    {
+        using var server = new FakeRtlTcpServer(header: null) { Header = null };
+        using var source = new RtlTcpIqSource(server.Endpoint, ReadOnly() with { IqSwap = true });
+        Task open = source.OpenAsync(CancellationToken.None);
+        server.WaitForConnections(1);
+        server.Send(new byte[12]);
+        await open;
+
+        server.Send([0, 255, 127, 128]);
+        float[] got = ReadAtLeast(source, 4);
+
+        // Swapped, so Q comes first and I second for each sample.
+        got.Should().Equal(1f, -1f, 0.5f / 127.5f, -0.5f / 127.5f);
+    }
+
+    [Fact]
     public async Task With_No_Gain_Given_The_Tuner_Is_Left_On_Its_Own_Gain()
     {
         using var server = new FakeRtlTcpServer();

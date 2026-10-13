@@ -592,6 +592,8 @@ Read for an `rtltcp:` device. Ignored otherwise. The server sends raw IQ and thi
 | `gainDb` | number | absent: the tuner's own gain | Tuner gain to ask for, 0 to 60 dB; the tuner takes its nearest step. Controlled only. |
 | `ppm` | int | `0` | Frequency correction to ask for, parts per million. Controlled only. |
 | `rtlAgc` | bool | `false` | Turn on the RTL2832's own digital AGC. Controlled only. |
+| `lfoOffsetHz` | number | `0` | Added to the centre frequency before it is sent to the dongle. For a dongle behind a converter whose own local oscillator puts the signal somewhere else than where this station hears it - an IF tap off another radio's IF, say, rather than the antenna directly. Controlled only. |
+| `iqSwap` | bool | `false` | Swap the I and Q samples the server sends: for a converter (or an inverted IF) whose spectrum comes out mirrored. Controlled only. |
 | `noDataSeconds` | number | `5` | Seconds a connected server may send nothing before it is dropped and reconnected. |
 | `ssbLowHz` | number | `150` | Bottom of the station's SSB filter, Hz from the dial. |
 | `ssbHighHz` | number | `3450` | Top of that filter. |
@@ -600,11 +602,12 @@ Read for an `rtltcp:` device. Ignored otherwise. The server sends raw IQ and thi
 | `gain` | number | `1.0` | Linear gain on the demodulated audio. |
 
 - The receiver is tuned by the band plan: every modem needs an `rfFrequency`, or `dialFrequency` must be set (`the rtl_tcp receiver at X has to be told where to listen ...`).
-- Controlled, the dongle is tuned 25 kHz below the dial (an eighth of the rate, at most 25 kHz), so its DC spike stays out of the channel. The rate, centre, correction, gain and AGC are sent at every connect, because the server may have restarted with its own defaults.
+- Controlled, the dongle is tuned 25 kHz below the dial (an eighth of the rate, at most 25 kHz), plus `lfoOffsetHz`, so its DC spike stays out of the channel. The rate, centre, correction, gain and AGC are sent at every connect, because the server may have restarted with its own defaults.
+- `lfoOffsetHz` and `iqSwap` are for a dongle that does not hear the band plan's dial directly: a converter ahead of it (an IF tap off another radio, say) puts the real tuning somewhere else and may invert the spectrum. Everything above this device - the band plan, the modems, the waterfall - still reads the dial exactly as it always did; only what is sent to the dongle and how its samples are read back change.
 - With `readOnly`, the dial has to fall inside the profile's band with its filter, or start-up stops with exit 2 (`cannot serve a dial of ...`).
 - A server that drops or goes quiet for `noDataSeconds` is reconnected, and the time it was gone is marked in the audio as a gap. One unreachable for five minutes stops the process with exit 1, and the service retries.
 - With `readOnly`, a stream that stops arriving at `sampleRate` (measured against the clock over five-second windows) is taken as a profile switch: its samples are dropped until the rate is right again, and the journal says so. A switch to another band at the same rate cannot be told for certain; a sudden lasting change in the stream's level or shape is said in the journal as a warning, and nothing else is done.
-- Refused, exit 2: `readOnly` without `centreFrequency` or `sampleRate`; `gainDb`, `ppm` or `rtlAgc` with `readOnly`; `centreFrequency` without it; a controlled `sampleRate` no dongle runs at; `gainDb` outside 0 to 60; `ppm` beyond 1000 either way; a `noDataSeconds`, `gain`, `fmIfBandwidthHz` or `fmDeviationHz` of 0 or less; `ssbLowHz` and `ssbHighHz` that do not rise from 0; any `ptt`, `rig`, `alsa.mixer` or `identify`, each named under its own section.
+- Refused, exit 2: `readOnly` without `centreFrequency` or `sampleRate`; `gainDb`, `ppm` or `rtlAgc` with `readOnly`; `lfoOffsetHz` or `iqSwap` with `readOnly`; `centreFrequency` without it; a controlled `sampleRate` no dongle runs at; `gainDb` outside 0 to 60; `ppm` beyond 1000 either way; a `lfoOffsetHz` that is not a frequency; a `noDataSeconds`, `gain`, `fmIfBandwidthHz` or `fmDeviationHz` of 0 or less; `ssbLowHz` and `ssbHighHz` that do not rise from 0; any `ptt`, `rig`, `alsa.mixer` or `identify`, each named under its own section.
 - The station receives only. A server that cannot be reached at start-up exits 1 and the service retries.
 
 ## `iqpipe`
